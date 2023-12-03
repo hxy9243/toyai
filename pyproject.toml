@@ -1,0 +1,14 @@
+[tool.poetry]
+name = "toygrad"
+version = "0.1.0"
+description = "A toy implementation of autograd algorithm"
+authors = ["Kevin Hu <hxy9243@gmail.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.10"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
