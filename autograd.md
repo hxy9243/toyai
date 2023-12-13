@@ -64,6 +64,34 @@ Think of it as a way of slowly approaching the optimal point based on the loss w
 
 ![Gradient Descent](https://upload.wikimedia.org/wikipedia/commons/f/ff/Gradient_descent.svg)
 
+# ToyGrad Architecture
+
+## Value Engine Design
+
+The core of this autograd engine design is the `Value` class that could both express the feed-forward computation
+as well as the backward propagation of gradients. These are the steps when considering its design:
+
+- Basic arithmatics: overriding the basic arithmatics of a Value.
+- Feed-forward computation: compute the basic elements.
+- The gradient computation: the basic feedfoward computation and its corresponding backward computation.
+
+## Neural Network Design
+
+With the Value engine designed, we could now chain these value computation to form a feed-forward neural network
+with dense layers, where all Values are connected to the next layer's values.
+
+We'll also need code for:
+
+- Neural network: create the layers and the whole neural network.
+- Parameter update: for each step, update the parameters.
+- Input and output: define the input and output of the neural network.
+
+## Things to Notice
+
+- Parameters include weights of the neural network and bias.
+- Init all the parameters with random values instead of zero.
+- Clean up all the gradients for each generation.
+
 # References
 
 - https://www.britannica.com/science/differentiation-mathematics
