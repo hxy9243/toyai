@@ -40,7 +40,7 @@ last layer to the first.
 
 ## AutoGrad
 
-AutoGrad, or automatic differentiation, is the implementation of the backpropagation algorithm.
+AutoGrad, or Automatic Differentiation, is the implementation of the backpropagation algorithm.
 It applies the gradient by chain rule in a reverse manner, calculating the derivative of all
 the function inputs by applying the gradient backwards in the compute graph.
 
@@ -50,6 +50,30 @@ on the loss of the function and the training data, to find the optimal model par
 https://pytorch.org/tutorials/beginner/blitz/autograd_tutorial.html#differentiation-in-autograd
 
 ![Autograd](https://raw.githubusercontent.com/karpathy/micrograd/c911406e5ace8742e5841a7e0df113ecb5d54685/gout.svg)
+
+The AutoGrad algorithm could be derived by:
+
+$$
+\frac{\partial y}{\partial x} = \frac{\partial y}{\partial w1} \cdot \frac{\partial w1}{\partial x}
+= (\frac{\partial y}{\partial w2} \cdot \frac{\partial w2}{\partial w1}) \cdot \frac{\partial w1}{\partial x}
+= ((\frac{\partial y}{\partial w3} \cdot \frac{\partial w3}{\partial w2}) \cdot \frac{\partial w2}{\partial w1}) \cdot \frac{\partial w1}{\partial x}
+$$
+
+Thus, the gradient of each intermediate variables, denoted as:
+
+$$ \bar{w}_{i} = \frac{\partial{y}}{\partial w_{i}} $$
+
+would be the sum of all gradients of its successors in the operation.
+
+$$ \bar{{w}}_{i}=\sum _{j\in \{{\text{successors of i}}\}}{\bar {w}}_{j}{\frac {\partial w_{j}}{\partial w_{i}}} $$
+
+or it could be written as:
+
+$$ \frac{\partial y}{\partial w_{i}} = \sum \frac{\partial y}{\partial w_{j}} \cdot \frac{\partial w_{j}}{\partial w_{i}} $$
+
+With this chain rule in mind, we could start with the seed 1 at the result of the equation (as $\frac{\partial y}{\partial y} = 1$), and back-propagate the gradients back to all intermediate variables and parameters.
+
+See more at: https://en.wikipedia.org/wiki/Automatic_differentiation#Reverse_accumulation
 
 ## Gradient Descent
 
