@@ -45,6 +45,23 @@ class Value:
 
         return v
 
+    def relu(self):
+        if self.val > 0:
+            v = Value(self.val)
+        else:
+            v = Value(0.0)
+        v.operands = set((self,))
+
+        def _backward():
+            if v.val > 0:
+                self.grad = v.grad
+            else:
+                self.grad = 0
+
+        v._backward = _backward
+
+        return v
+
     def __rmul__(self, other):
         return self * other
 
@@ -64,3 +81,23 @@ class Value:
 
     def __rtruediv__(self, other):
         return other * self**-1
+
+    def backward(self):
+        # propagate grad backward to the previous operands
+        # do a reverse topo sort to get the order of backward propagation
+        visited = set()
+        results = []
+
+        def topo(v):
+            for op in v.operands:
+                if op in visited:
+                    continue
+                visited.add(op)
+                topo(op)
+            results.append(v)
+
+        topo(self)
+        self.grad = 1
+
+        for v in reversed(results):
+            v._backward()
