@@ -4,7 +4,9 @@ from random import random
 from toygrad.engine import Value
 
 
-class Model:
+class Module:
+    def zero_grad(self):
+        pass
 
     def forward(self):
         pass
