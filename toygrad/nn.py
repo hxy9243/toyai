@@ -22,23 +22,25 @@ class Linear:
         self.in_features = in_features
         self.out_features = out_features
 
-        self.weights = [Value(random()) for _ in range(out_features)]
-        self.bias = Value(random())
+        # create a matrix of out_features * in_features
+        self.weights = [
+            [Value(random()) for _ in range(in_features)] for _ in range(out_features)
+        ]
+        self.bias = [Value(random()) for _ in range(out_features)]
 
     def __call__(self, in_values: List[Value]) -> List[Value]:
         out_values = []
-
-        for p in self.parameters:
+        for i in range(self.out_features):
             out = Value(0.0)
-            for v in in_values:
-                out += p * v
+            for j in range(self.in_features):
+                out += self.weights[i][j] * in_values[j]
 
-            out_values.append(out + self.bias)
+            out_values.append(out)
+
+        for i in range(self.out_features):
+            out_values[i] += self.bias[i]
 
         return out_values
 
     def parameters(self):
-        params = [w for w in self.weights]
-        params.append(self.bias)
-
-        return params
+        return [w for lines in self.weights for w in lines] + [b for b in self.bias]
