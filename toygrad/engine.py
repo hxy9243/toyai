@@ -54,9 +54,7 @@ class Value:
 
         def _backward():
             if v.val > 0:
-                self.grad = v.grad
-            else:
-                self.grad = 0
+                self.grad += v.grad
 
         v._backward = _backward
 
@@ -71,7 +69,7 @@ class Value:
         v.operands = set((self,))
 
         def _backward():
-            self.grad += other.val * self.val ** (other.val - 1) * v.grad
+            self.grad += (other.val * self.val ** (other.val - 1)) * v.grad
 
         v._backward = _backward
         return v
