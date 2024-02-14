@@ -2,6 +2,7 @@ import math
 
 import numpy as np
 
+from toygrad.engine import Value
 from toygrad.nn import Module, Linear
 
 STEPS = 10
@@ -12,16 +13,13 @@ class Model(Module):
         super().__init__()
 
         self.layer1 = Linear(input_features, 8)
-        self.layer2 = Linear(8, 8)
-        self.layer3 = Linear(8, 4)
+        self.layer2 = Linear(8, 4)
         self.output = Linear(4, output_features)
 
     def forward(self, X):
         X = self.layer1(X)
         X = [xi.relu() for xi in X]
         X = self.layer2(X)
-        X = [xi.relu() for xi in X]
-        X = self.layer3(X)
         X = [xi.relu() for xi in X]
         output = self.output(X)
         return output
@@ -30,35 +28,38 @@ class Model(Module):
         return (
             self.layer1.parameters()
             + self.layer2.parameters()
-            + self.layer3.parameters()
             + self.output.parameters()
         )
 
     def train(self, X, y, epochs=1, learning_rate=1e-5):
         for epoch in range(epochs):
-            loss = 0.0
-
+            # loss = 0.0
+            final_cost = Value(0.0)
             for i, xval in enumerate(X):
                 out = self.forward(xval)
 
                 # get cost function
                 cost = ((y[i] - out) ** 2)[0]
 
-                # backward
-                cost.backward()
+                final_cost += cost
 
-                # apply the grad with learning rate
-                for p in self.parameters():
-                    p.val -= p.grad * learning_rate
+            final_cost = final_cost / len(X)
 
-                # zero out the grads
-                for p in self.parameters():
-                    p.grad = 0.0
+            # backward
+            final_cost.backward()
 
-                loss += cost.val**0.5
+            # apply the grad with learning rate
+            for p in self.parameters():
+                p.val -= p.grad * learning_rate
 
-            loss = loss / len(X)
-            print(f"Epoch {epoch+1}: loss {loss}")
+            # zero out the grads
+            for p in self.parameters():
+                p.grad = 0.0
+
+            loss = final_cost.val
+
+            if epoch % 100 == 0:
+                print(f"Epoch [{epoch+1}/{epochs}]: loss {loss}")
 
 
 def main():
