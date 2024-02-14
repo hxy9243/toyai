@@ -20,6 +20,9 @@ class Value:
         v._backward = _backward
         return v
 
+    def __radd__(self, other):
+        return other.__add__(self)
+
     def __neg__(self):
         return self * -1
 
@@ -27,10 +30,10 @@ class Value:
         return self.__add__(other)
 
     def __sub__(self, other):
-        return self + (-1 * other)
+        return self + (-other)
 
     def __rsub__(self, other):
-        return other + (-1 * self)
+        return other + (-self)
 
     def __mul__(self, other):
         other = Value(other) if not isinstance(other, Value) else other
@@ -44,6 +47,9 @@ class Value:
         v._backward = _backward
 
         return v
+
+    def __rmul__(self, other):
+        return self * other
 
     def relu(self):
         if self.val > 0:
@@ -59,9 +65,6 @@ class Value:
         v._backward = _backward
 
         return v
-
-    def __rmul__(self, other):
-        return self * other
 
     def __pow__(self, other):
         other = Value(other) if not isinstance(other, Value) else other

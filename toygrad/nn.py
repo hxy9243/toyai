@@ -22,13 +22,19 @@ class Linear:
         self.in_features = in_features
         self.out_features = out_features
 
-        # create a matrix of out_features * in_features
+        # create a matrix of shape out_features * in_features
+        # output y = Wx + b
         self.weights = [
             [Value(random()) for _ in range(in_features)] for _ in range(out_features)
         ]
         self.bias = [Value(random()) for _ in range(out_features)]
 
     def __call__(self, in_values: List[Value]) -> List[Value]:
+        if len(in_values) != self.in_features:
+            raise ValueError(
+                f"Expecting input size {self.in_features}, getting {len(in_values)}"
+            )
+
         out_values = []
         for i in range(self.out_features):
             out = Value(0.0)
