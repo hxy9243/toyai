@@ -1,6 +1,9 @@
 from dataclasses import dataclass
+import math
+
 import torch
 import torch.nn as nn
+import torch.functional as F
 
 
 @dataclass
@@ -25,7 +28,7 @@ class GPT(nn.Module):
                 # positional encoding layer
                 wpe=nn.Embedding(config.block_size, config.n_embed),
                 # multi-head attention layers
-                h=nn.ModuleList(),
+                h=nn.ModuleList([Block(config) for _ in range(config.n_layers)]),
                 # layer normalization
                 ln_f=nn.LayerNorm(config.n_embed),
             )
@@ -35,11 +38,62 @@ class GPT(nn.Module):
         self.lm_head = nn.Linear(config.n_embed, config.vocab_size, bias=False)
 
     @classmethod
-    def from_pretrained(cls, model_type):
+    def from_pretrained(cls, model_type: str):
+        assert model_type in {"gpt2", "gpt2-medium", "gpt2-large", "gpt2-xl"}
         from transformers import GPT2LMHeadModel
 
-        hf_model = GPT2LMHeadModel.from_pretrained()
-        hf_model.state_dict()
+        print(f"Loading weights from pretrained gpt: {model_type}")
+        config_args = {
+            "gpt2": dict(n_layers=12, n_head=12, n_embed=768),
+            "gpt2-medium": dict(n_layers=12, n_head=16, n_embed=1024),
+            "gpt2-large": dict(n_layers=36, n_head=20, n_embed=1280),
+            "gpt2-xl": dict(n_layers=48, n_head=25, n_embed=1600),
+        }[model_type]
+        config_args["vocab_size"] = 50257
+        config_args["block_size"] = 1024
+
+        # init our GPT model
+        config = GPTConfig(**config_args)
+        model = GPT(config)
+        sd = model.state_dict()
+        sd_keys = sd.keys()
+        sd_keys = [
+            k for k in sd_keys if not k.endswith(".attn.bias")
+        ]  # discard mask/buff
+
+        # load GPT2 model pretrained weights from huggingface
+        hf_model = GPT2LMHeadModel.from_pretrained(model_type)
+        sd_hf = hf_model.state_dict()
+        sd_keys_hf = [
+            k
+            for k in sd_hf.keys()
+            if (not k.endswith(".attn.masked_bias") and not k.endswith(".attn.bias"))
+        ]
+
+        # we need to transpose certain weights to match the GPT-2 weights
+        transposed = [
+            "attn.c_attn.weight",
+            "attn.c_proj.weight",
+            "mlp.c_fc.weight",
+            "mlp.c_proj.weight",
+        ]
+        assert len(sd_keys_hf) == len(sd_keys)
+
+        for k in sd_keys_hf:
+            if any(k.endswith(w) for w in transposed):
+                # assert it's transposed
+                assert sd_hf[k].shape[::-1] == sd[k].shape
+                with torch.no_grad():
+                    sd[k].copy_(sd_hf[k].t())
+
+            else:
+                assert sd_hf[k].shape == sd[k].shape, \
+                    f'Key {k} has different shape, HF: {sd_hf[k].shape}, model: {sd[k].shape}'
+                with torch.no_grad():
+                    sd[k].copy_(sd_hf[k])
+
+            return model
+
 
     def forward(self): ...
 
@@ -54,9 +108,9 @@ class Block(nn.Module):
     def __init__(self, config: GPTConfig):
         super().__init__()
 
-        self.ln_1 = nn.LayerNorm(config)
+        self.ln_1 = nn.LayerNorm(config.n_embed)
         self.attn = CausalSelfAttention(config)
-        self.ln_2 = nn.LayerNorm(config)
+        self.ln_2 = nn.LayerNorm(config.n_embed)
         self.mlp = MLP(config)
 
     def forward(self, x):
@@ -84,11 +138,14 @@ class CausalSelfAttention(nn.Module):
 
         # register buffer for bias?
         # is actually the attention mask to mask future tokens during training process
-        self.register_buffer("bias", torch.tril(
-            torch.ones(
-                (config.block_size, config.block_size))
-                .view(1, 1, config.block_size, config.block_size),
-        ))
+        self.register_buffer(
+            "bias",
+            torch.tril(
+                torch.ones((config.block_size, config.block_size)).view(
+                    1, 1, config.block_size, config.block_size
+                ),
+            ),
+        )
 
     def forward(self, x):
         # batchsize, sequence size, number of channels
@@ -109,12 +166,12 @@ class CausalSelfAttention(nn.Module):
 
         # calculate attention with mask
         att = q @ k.transpose(-2, -1) * (1.0 / math.sqrt(k.size(-1)))
-        att = att.masked_fill(self.bias[:, :, :T, :T] == 0, float('-inf'))
+        att = att.masked_fill(self.bias[:, :, :T, :T] == 0, float("-inf"))
         att = F.softmax(att, dim=-1)
-        y = att @ v # (B, nh, T, T) @ (B, nh, T, hs) -> (B, nh, T, hs)
+        y = att @ v  # (B, nh, T, T) @ (B, nh, T, hs) -> (B, nh, T, hs)
 
         # reassemble the heads into contiguous memory space as a single matrix
-        y = y.transpose(1, 2).contiguous().view(B, T, C) # (B, T, C)
+        y = y.transpose(1, 2).contiguous().view(B, T, C)  # (B, T, C)
         y = self.c_proj(y)
         return y
 
