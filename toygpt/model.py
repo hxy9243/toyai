@@ -3,7 +3,8 @@ import math
 
 import torch
 import torch.nn as nn
-import torch.functional as F
+import torch.nn.functional as F
+import tiktoken
 
 
 @dataclass
@@ -64,9 +65,9 @@ class GPT(nn.Module):
         # load GPT2 model pretrained weights from huggingface
         hf_model = GPT2LMHeadModel.from_pretrained(model_type)
         sd_hf = hf_model.state_dict()
+        # discard the masks
         sd_keys_hf = [
-            k
-            for k in sd_hf.keys()
+            k for k in sd_hf.keys()
             if (not k.endswith(".attn.masked_bias") and not k.endswith(".attn.bias"))
         ]
 
@@ -79,23 +80,73 @@ class GPT(nn.Module):
         ]
         assert len(sd_keys_hf) == len(sd_keys)
 
+        print("copying model from pretrained to model")
         for k in sd_keys_hf:
+            print(f"copying layer {k}")
             if any(k.endswith(w) for w in transposed):
                 # assert it's transposed
                 assert sd_hf[k].shape[::-1] == sd[k].shape
                 with torch.no_grad():
                     sd[k].copy_(sd_hf[k].t())
-
             else:
                 assert sd_hf[k].shape == sd[k].shape, \
                     f'Key {k} has different shape, HF: {sd_hf[k].shape}, model: {sd[k].shape}'
                 with torch.no_grad():
                     sd[k].copy_(sd_hf[k])
 
-            return model
+        return model
+
+    def forward(self, x: torch.tensor) -> torch.tensor:
+        # input is of size (B, T)
+        B, T = x.size()
+        assert T <= self.config.block_size
+
+        pos = torch.arange(0, T, dtype=torch.long)
+        pos_emb = self.transformer.wpe(pos)
+        tok_emb = self.transformer.wte(x)
+        x = pos_emb + tok_emb
+
+        for block in self.transformer.h:
+            x = block(x)
+        x = self.transformer.ln_f(x)
+        logits = self.lm_head(x)
+
+        # return logits of shape (B, T, vocab_size)
+        return logits
+
+    def generate(self, prompt: str, num_return_seq=5, num_return_tokens=64) -> str:
+        enc = tiktoken.get_encoding('gpt2')
+
+        tokens = enc.encode(prompt)
+        tokens = torch.tensor(tokens, dtype=torch.long)
+        x = tokens.unsqueeze(0).repeat(num_return_seq, 1)
+
+        while x.size(1) < num_return_tokens:
+            with torch.no_grad():
+                logits = self.forward(x)
+                logits = logits[:, -1, :] # (B, vocab_size)
+                probs = F.softmax(logits, dim=-1)
+
+                topk_probs, topk_indices = torch.topk(probs, 10, dim=-1)
+
+                ix = torch.multinomial(topk_probs, 1)
+                xcol = torch.gather(topk_indices, -1, ix)
+                x = torch.cat((x, xcol), dim=1)
+
+                # argmax = torch.argmax(probs, dim=-1)
+                # xcol = argmax.unsqueeze(0)
+                # x = torch.cat((x, xcol), dim=1)
+
+        max_length = self.config.block_size
+        for i in range(num_return_seq):
+            tokens = x[i, :max_length].tolist()
+            decoded = enc.decode(tokens)
+
+            print(decoded)
 
 
-    def forward(self): ...
+    def __call__(self, x: str) -> str:
+        return self.generate(x)
 
 
 class Block(nn.Module):
