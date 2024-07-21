@@ -1,3 +1,4 @@
+from typing import List, Generator
 from dataclasses import dataclass
 import math
 
@@ -67,7 +68,8 @@ class GPT(nn.Module):
         sd_hf = hf_model.state_dict()
         # discard the masks
         sd_keys_hf = [
-            k for k in sd_hf.keys()
+            k
+            for k in sd_hf.keys()
             if (not k.endswith(".attn.masked_bias") and not k.endswith(".attn.bias"))
         ]
 
@@ -89,8 +91,9 @@ class GPT(nn.Module):
                 with torch.no_grad():
                     sd[k].copy_(sd_hf[k].t())
             else:
-                assert sd_hf[k].shape == sd[k].shape, \
-                    f'Key {k} has different shape, HF: {sd_hf[k].shape}, model: {sd[k].shape}'
+                assert (
+                    sd_hf[k].shape == sd[k].shape
+                ), f"Key {k} has different shape, HF: {sd_hf[k].shape}, model: {sd[k].shape}"
                 with torch.no_grad():
                     sd[k].copy_(sd_hf[k])
 
@@ -114,36 +117,47 @@ class GPT(nn.Module):
         # return logits of shape (B, T, vocab_size)
         return logits
 
-    def generate(self, prompt: str, num_return_seq=5, num_return_tokens=64) -> str:
-        enc = tiktoken.get_encoding('gpt2')
-
+    def generate(self, prompt:str, num_return_tokens=64) -> Generator[str]:
         tokens = enc.encode(prompt)
         tokens = torch.tensor(tokens, dtype=torch.long)
-        x = tokens.unsqueeze(0).repeat(num_return_seq, 1)
+
+        while x.size(1) < num_return_tokens:
+            with torch.no_grad():
+                ...
+
+
+    def batch_predict(self, prompts: List[str], num_return_tokens=64) -> List[str]:
+        enc = tiktoken.get_encoding("gpt2")
+
+        tokens = enc.encode_batch(prompts)
+        tokens = torch.tensor(tokens, dtype=torch.long)
+
+        x = tokens
 
         while x.size(1) < num_return_tokens:
             with torch.no_grad():
                 logits = self.forward(x)
-                logits = logits[:, -1, :] # (B, vocab_size)
+                logits = logits[:, -1, :]  # (B, vocab_size)
                 probs = F.softmax(logits, dim=-1)
 
-                topk_probs, topk_indices = torch.topk(probs, 10, dim=-1)
+                # topk_probs, topk_indices = torch.topk(probs, 10, dim=-1)
 
-                ix = torch.multinomial(topk_probs, 1)
-                xcol = torch.gather(topk_indices, -1, ix)
-                x = torch.cat((x, xcol), dim=1)
-
-                # argmax = torch.argmax(probs, dim=-1)
-                # xcol = argmax.unsqueeze(0)
+                # ix = torch.multinomial(topk_probs, 1)
+                # xcol = torch.gather(topk_indices, -1, ix)
                 # x = torch.cat((x, xcol), dim=1)
 
-        max_length = self.config.block_size
-        for i in range(num_return_seq):
-            tokens = x[i, :max_length].tolist()
-            decoded = enc.decode(tokens)
+                argmax = torch.argmax(probs, dim=-1)
+                xcol = argmax.unsqueeze(1)
 
-            print(decoded)
+                # print(f'x size {x.shape}, xcol size {xcol.shape}')
+                x = torch.cat((x, xcol), dim=1)
+                yield enc.decode(xcol[-1].tolist())
 
+    #        max_length = self.config.block_size
+    #        for i in range(num_return_seq):
+    #            tokens = x[i, :max_length].tolist()
+    #            decoded = enc.decode(tokens)
+    #            print(decoded)
 
     def __call__(self, x: str) -> str:
         return self.generate(x)
