@@ -2,8 +2,8 @@ import math
 
 import numpy as np
 
-from toygrad.engine import Value
-from toygrad.nn import Module, Linear
+from engine import Value
+from nn import Module, Linear
 
 STEPS = 10
 
