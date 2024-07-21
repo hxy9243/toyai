@@ -61,15 +61,21 @@ $$
 
 Thus, the gradient of each intermediate variables, denoted as:
 
-$$ \bar{w}_{i} = \frac{\partial{y}}{\partial w_{i}} $$
+$$
+\bar{w}_{i} = \frac{\partial{y}}{\partial w_{i}}
+$$
 
 would be the sum of all gradients of its successors in the operation.
 
-$$ \bar{{w}}_{i}=\sum _{j\in \{{\text{successors of i}}\}}{\bar {w}}_{j}{\frac {\partial w_{j}}{\partial w_{i}}} $$
+$$
+\bar{{w}}_{i}=\sum _{j\in \{{\text{successors of i}}\}}{\bar {w}}_{j}{\frac {\partial w_{j}}{\partial w_{i}}}
+$$
 
 or it could be written as:
 
-$$ \frac{\partial y}{\partial w_{i}} = \sum \frac{\partial y}{\partial w_{j}} \cdot \frac{\partial w_{j}}{\partial w_{i}} $$
+$$
+\frac{\partial y}{\partial w_{i}} = \sum \frac{\partial y}{\partial w_{j}} \cdot \frac{\partial w_{j}}{\partial w_{i}}
+$$
 
 With this chain rule in mind, we could start with the seed 1 at the result of the equation (as $\frac{\partial y}{\partial y} = 1$), and back-propagate the gradients back to all intermediate variables and parameters.
 
