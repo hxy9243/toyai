@@ -103,14 +103,24 @@ class GPT(nn.Module):
         B, T = x.size()
         assert T <= self.config.block_size
 
+        # create embedding from token embedding + positional embedding
+        # input size (B, T, internal)
+        # output size (B, T, internal)
         pos = torch.arange(0, T, dtype=torch.long)
         pos_emb = self.transformer.wpe(pos)
         tok_emb = self.transformer.wte(x)
         x = pos_emb + tok_emb
 
+        # go through n_layers of blocks of attention + MLP
+        # input size (B, T, C)
+        # output size (B, T, C)
         for block in self.transformer.h:
             x = block(x)
         x = self.transformer.ln_f(x)
+
+        # go through LM head to translate embedding back to vocab
+        # input size (B, T, C)
+        # output size (B, T, vocab_size)
         logits = self.lm_head(x)
 
         # return logits of shape (B, T, vocab_size)
