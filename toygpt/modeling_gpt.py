@@ -1,4 +1,4 @@
-from typing import List, Generator, Optional
+from typing import List, Iterator, Optional
 from dataclasses import dataclass
 import math
 
@@ -98,7 +98,7 @@ class GPT(nn.Module):
 
         return model
 
-    def forward(self, x: torch.tensor) -> torch.tensor:
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         # input is of size (B, T)
         B, T = x.size()
         assert T <= self.config.block_size
@@ -133,7 +133,7 @@ class GPT(nn.Module):
         temperature=0.7,
         sampling=False,
         topk=10,
-    ) -> Generator[str, None, None]:
+    ) -> Iterator[str]:
         from transformers import AutoTokenizer
 
         enc = AutoTokenizer.from_pretrained("gpt2")
@@ -159,7 +159,7 @@ class GPT(nn.Module):
                     x = torch.cat((x, xcol), dim=1)
                     yield enc.decode(xcol[-1].tolist())
 
-    def __call__(self, x: str) -> str:
+    def __call__(self, x: str) -> Iterator[str]:
         return self.generate(x)
 
 
@@ -178,7 +178,8 @@ class Block(nn.Module):
         self.ln_2 = nn.LayerNorm(config.n_embed)
         self.mlp = MLP(config)
 
-    def forward(self, x: torch.tensor):
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         # x adds the output of layernorm and attention layer
         # this creates a residual connection
         x = x + self.attn(self.ln_1(x))
