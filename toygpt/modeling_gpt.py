@@ -213,7 +213,7 @@ class CausalSelfAttention(nn.Module):
             ),
         )
 
-    def forward(self, x: torch.tensor):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         # batchsize, sequence size, number of channels
         # calculate the q, k, v for all heads in batch
         B, T, C = x.size()
@@ -265,7 +265,7 @@ class MLP(nn.Module):
         # projection layer
         self.c_proj = nn.Linear(4 * config.n_embed, config.n_embed)
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.c_fc(x)
         x = self.gelu(x)
         x = self.c_proj(x)
