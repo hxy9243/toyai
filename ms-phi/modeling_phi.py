@@ -8,10 +8,21 @@ import torch.nn.functional as F
 
 @dataclass
 class PhiLMConfig:
-    block_size: int = 256
-    vocab_size: int = 128000
-    n_layers: int = 32
-    n_embed: int = 3072
+    """ Model the configuration from here: https://github.com/huggingface/transformers/blob/main/src/transformers/models/phi/configuration_phi.py
+    """
+
+    vocab_size: int = 32064
+    hidden_size: int = 3072
+    intermediate_size: int = 8192
+    num_hidden_layers: int = 32
+    num_attention_heads: int = 32
+    hidden_act: str = 'silu'
+    max_position_embeddings: int = 4096
+    rms_norm_eps: float = 1e-5
+    rope_theta: int = 10000.0
+    bos_token_id: int = 1
+    eos_token_id: int = 32000
+    pad_token_id: int = 32000
 
 
 class PhiCausalLM(nn.Module):
@@ -26,17 +37,67 @@ class PhiCausalLM(nn.Module):
             )
         )
 
+    @torch.no_grad()
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """ forward the input through the transformer layer, return logits.
+        input shape (Batch_size, Sequence size)
+        return shape (Batch_size, 1)
+        """
+        B, S = x.size()
+        assert S <= self.config.max_position_embeddings
+
+        x = self.model.embed_tokens(x)
+
+        for layer in self.model.layers:
+            x = layer(x)
+
+        return self.model.lm_head(x)
+
+
+class Phi3RMSNorm(nn.Module):
+    """ Phi3 uses a Llama RMS Norm: layer normalizes by dividing the stddev of the sequence.
+    """
+
+    def __init__(self, config: PhiLMConfig):
+        super().__init__()
+
+        self.config = config
+        self.weight = nn.Parameter(torch.ones(config.hidden_size))
+
+    def forwards(self, x):
+        # TODO: consider upscaling for better float precision
+
+        variance = x.pow(2).mean(-1, keepdim=True)
+        x = x * torch.rsqrt(variance + self.config.rms_norm_eps)
+
+        return self.weight(x)
+
 
 class DecodeLayer(nn.Module):
 
     def __init__(self, config: PhiLMConfig):
         super().__init__()
 
-        self.input_layernorm = nn.LayerNorm(config.n_embed)
-        self.self_attn = None
-        self.mlp = None
-        self.post_attention_layernorm = nn.LayerNorm(config.n_embed)
+        self.input_layernorm = Phi3RMSNorm(self.config)
+        self.post_attention_layernorm = Phi3RMSNorm(self.config)
 
+        self.self_attn = AttentionLayer(self.config)
+        self.mlp = None
+
+    def forward(self, x) -> torch.Tensor:
+        # go through self attention layer
+        residual = x
+        x = self.input_layernorm(x)
+        x = self.self_attn(x)
+        x = residual + x
+
+        # go through mlp layer
+        residual = x
+        x = self.post_attention_layernorm(x)
+        x = self.mlp(x)
+        x = residual + x
+
+        return x
 
 class AttentionLayer(nn.Module):
 
