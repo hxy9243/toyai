@@ -163,6 +163,14 @@ class AttentionLayer(nn.Module):
         )
         self.o_proj = nn.Linear(config.hidden_size, config.hidden_size)
 
+        seq = config.max_position_embeddings
+        self.register_buffer(
+            'mask',
+            torch.tril(torch.ones(seq, seq)).view(
+                1, 1, seq, seq,
+            )
+        )
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # input of shape (bs, seq, hidden)
         qkv = self.qkv_proj(x)
@@ -181,9 +189,12 @@ class AttentionLayer(nn.Module):
 
         # output shape (bs, head, seq, head_size)
         output = q @ k.transpose(-2, -1) / math.sqrt(head_size) # bs, head, seq, seq
-        # TODO: mask?
+
+        # apply attention mask
+        seq = x.shape[1]
+        output = output.masked_fill(self.mask[:, :, :seq, :seq] == 0, float('-inf'))
         output = torch.softmax(output, dim=-1)
-        output = output @ v #
+        output = output @ v # bs, seq, head, head_size
 
         # output of shape (bs, seq, hidden)
         output = output.transpose(2, 1)  # bs, head, seq, head_size
