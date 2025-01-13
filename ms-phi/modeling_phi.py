@@ -40,9 +40,10 @@ class PhiCausalLM(nn.Module):
                 layers=nn.ModuleList(
                     [DecodeLayer(config) for _ in range(config.num_hidden_layers)]
                 ),
-                lm_head=nn.Linear(config.hidden_size, config.vocab_size, bias=False),
+                norm=Phi3RMSNorm(config),
             )
         )
+        self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
 
     @classmethod
     def from_pretrained(cls):
@@ -77,7 +78,8 @@ class PhiCausalLM(nn.Module):
         for layer in self.model.layers:
             x = layer(x)
 
-        return self.model.lm_head(x)
+        x = self.model.norm(x)
+        return self.lm_head(x)
 
 
 class Phi3RMSNorm(nn.Module):
