@@ -38,11 +38,30 @@ class PhiCausalLM(nn.Module):
                     padding_idx=config.pad_token_id,
                 ),
                 layers=nn.ModuleList(
-                    [DecodeLayer(config) for _ in range(config.n_layers)]
+                    [DecodeLayer(config) for _ in range(config.num_hidden_layers)]
                 ),
                 lm_head=nn.Linear(config.hidden_size, config.vocab_size, bias=False),
             )
         )
+
+    @classmethod
+    def from_pretrained(cls):
+        from transformers import AutoModelForCausalLM
+        weights = AutoModelForCausalLM.from_pretrained('microsoft/Phi-3.5-mini-instruct')
+
+        config = PhiLMConfig()
+        model = PhiCausalLM(config)
+        state_dict = model.state_dict()
+
+        for k, param in state_dict.items():
+            print(f"layer name {k}, {param.shape}")
+
+        for name, weight in weights.state_dict().items():
+            print(f'copying weights for {name}')
+            with torch.no_grad():
+                weight.copy_(state_dict[name])
+
+        return model
 
     @torch.no_grad()
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -68,14 +87,13 @@ class Phi3RMSNorm(nn.Module):
         super().__init__()
 
         self.rms_norm_eps = config.rms_norm_eps
+        self.weight = nn.Parameter(torch.ones(config.hidden_size, dtype=torch.bfloat16))
 
-        self.weight = nn.Parameter(torch.ones(config.hidden_size))
-
-    def forwards(self, x):
+    def forward(self, x):
         # TODO: consider upscaling for better float precision
 
         variance = x.pow(2).mean(-1, keepdim=True)
-        x = x * torch.rsqrt(variance + self.rms_norm_eps)
+        x = x * torch.rsqrt(variance + self.rms_norm_eps).to(torch.bfloat16)
 
         return self.weight(x)
 
@@ -100,7 +118,7 @@ class Phi3RotaryPositionEmbedding(nn.Module):
         """
 
         inv_freq = 1.0 / (
-            self.rope_theta ** (torch.arange(0, self.dim / 2, dtype=torch.int64).float() / self.dim)
+            self.rope_theta ** (torch.arange(0, self.dim / 2, dtype=torch.int64).to(torch.bfloat16) / self.dim)
         )
 
         position_ids = torch.arange(0, self.seq_size)
@@ -159,14 +177,14 @@ class AttentionLayer(nn.Module):
         self.hidden_size = config.hidden_size
         self.heads = config.num_attention_heads
         self.qkv_proj = nn.Linear(
-            config.hidden_size, 3 * config.hidden_size, bias=False
+            config.hidden_size, 3 * config.hidden_size, bias=False, dtype=torch.bfloat16,
         )
-        self.o_proj = nn.Linear(config.hidden_size, config.hidden_size)
+        self.o_proj = nn.Linear(config.hidden_size, config.hidden_size, bias=False, dtype=torch.bfloat16)
 
         seq = config.max_position_embeddings
         self.register_buffer(
             'mask',
-            torch.tril(torch.ones(seq, seq)).view(
+            torch.tril(torch.ones(seq, seq, dtype=torch.bfloat16)).view(
                 1, 1, seq, seq,
             )
         )
@@ -214,10 +232,10 @@ class MLP(nn.Module):
         super().__init__()
 
         self.gate_up_proj = nn.Linear(
-            config.hidden_size, config.intermediate_size * 2, bias=False
+            config.hidden_size, config.intermediate_size * 2, bias=False, dtype=torch.bfloat16,
         )
         self.down_proj = nn.Linear(
-            config.intermediate_size, config.hidden_size, bias=False
+            config.intermediate_size, config.hidden_size, bias=False, dtype=torch.bfloat16,
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
