@@ -44,6 +44,7 @@ class PhiCausalLM(nn.Module):
                 norm=Phi3RMSNorm(config),
             )
         )
+
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False, dtype=torch.bfloat16)
 
     @classmethod
@@ -114,22 +115,23 @@ class Phi3RotaryPositionEmbedding(nn.Module):
         self.seq_size = config.max_position_embeddings
         self.rope_theta = config.rope_theta
 
+        self.cache = None
         self.cos, self.sin = self._init_cache()
 
     def _init_cache(self) -> Tuple[torch.Tensor]:
         """ return cos and sin cache as shape (seq, dim)
         """
-
+        # force float32 to avoid precision issues
         inv_freq = 1.0 / (
-            self.rope_theta ** (torch.arange(0, self.dim / 2, dtype=torch.int64).to(torch.bfloat16) / self.dim)
+            self.rope_theta ** (torch.arange(0, self.dim, 2, dtype=torch.int64).to(torch.float32) / self.dim)
         )
-
-        position_ids = torch.arange(0, self.seq_size)
+        position_ids = torch.arange(0, self.seq_size).float()
 
         cache = torch.outer(position_ids, inv_freq)
         cache = torch.cat((cache, cache), dim=-1)
+        self.cache = cache
 
-        return cache.cos(), cache.sin()
+        return cache.cos().to(torch.bfloat16), cache.sin().to(torch.bfloat16)
 
     def rotate_half(self, x: torch.Tensor) -> torch.Tensor:
         x0 = x[..., :x.shape[-1] // 2]
@@ -141,8 +143,11 @@ class Phi3RotaryPositionEmbedding(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """ assume the x input is of shape (bs, head, seq, head_dim)
         """
+        bs, nhead, s, head_dim = x.shape
+        cos = self.cos[:s, :].to(x.dtype)
+        sin = self.sin[:s, :].to(x.dtype)
 
-        return self.cos * x + self.sin * self.rotate_half(x)
+        return x * cos + self.rotate_half(x) * sin
 
 
 class DecodeLayer(nn.Module):
@@ -153,7 +158,7 @@ class DecodeLayer(nn.Module):
         self.input_layernorm = Phi3RMSNorm(config)
         self.post_attention_layernorm = Phi3RMSNorm(config)
 
-        self.self_attn = AttentionLayer(config)
+        self.self_attn = AttentionLayer(config, Phi3RotaryPositionEmbedding(config))
         self.mlp = MLP(config)
 
     def forward(self, x) -> torch.Tensor:
@@ -174,7 +179,7 @@ class DecodeLayer(nn.Module):
 
 class AttentionLayer(nn.Module):
 
-    def __init__(self, config: PhiLMConfig):
+    def __init__(self, config: PhiLMConfig, rope: "Phi3RotaryPositionEmbedding"):
         super().__init__()
 
         self.hidden_size = config.hidden_size
@@ -184,6 +189,7 @@ class AttentionLayer(nn.Module):
         )
         self.o_proj = nn.Linear(config.hidden_size, config.hidden_size, bias=False, dtype=torch.bfloat16)
 
+        self.rope = rope
         seq = config.max_position_embeddings
         self.register_buffer(
             'mask',
@@ -211,6 +217,9 @@ class AttentionLayer(nn.Module):
         k = k.contiguous().view(hidden_shape).transpose(1, 2)
         v = k.contiguous().view(hidden_shape).transpose(1, 2)
 
+        q = self.rope(q)
+        k = self.rope(k)
+
         # output shape (bs, head, seq, head_size)
         output = q @ k.transpose(-2, -1) / math.sqrt(head_size) # bs, head, seq, seq
 
@@ -218,10 +227,10 @@ class AttentionLayer(nn.Module):
         seq = x.shape[1]
         output = output.masked_fill(self.mask[:, :, :seq, :seq] == 0, float('-inf'))
         output = torch.softmax(output, dim=-1)
-        output = output @ v # bs, seq, head, head_size
+        output = output @ v # bs, head, seq, head_size
 
         # output of shape (bs, seq, hidden)
-        output = output.transpose(2, 1)  # bs, head, seq, head_size
+        output = output.transpose(2, 1)  # bs, seq, head, head_size
         output = output.contiguous().view(input_shape)
 
         output = self.o_proj(output)
