@@ -36,6 +36,7 @@ class PhiCausalLM(nn.Module):
                     config.vocab_size,
                     config.hidden_size,
                     padding_idx=config.pad_token_id,
+                    dtype=torch.bfloat16,
                 ),
                 layers=nn.ModuleList(
                     [DecodeLayer(config) for _ in range(config.num_hidden_layers)]
@@ -97,7 +98,7 @@ class Phi3RMSNorm(nn.Module):
         variance = x.pow(2).mean(-1, keepdim=True)
         x = x * torch.rsqrt(variance + self.rms_norm_eps).to(torch.bfloat16)
 
-        return self.weight(x)
+        return x * self.weight
 
 
 class Phi3RotaryPositionEmbedding(nn.Module):
@@ -196,16 +197,19 @@ class AttentionLayer(nn.Module):
         qkv = self.qkv_proj(x)
 
         # split qkv into shape of (bs, seq, 3 * hidden) into q, k, v of shape (bs, seq, hidden)
-        q, k, v = torch.split(self.hidden_size, dim=-1)
+        q, k, v = torch.split(qkv, self.hidden_size, dim=-1)
 
         # transpose all into:
         #   shape (bs, seq, heads, head_size)
         #   shape (bs, heads, seq, head_size)
         # so that all subsequent operations are on each head
         head_size = self.hidden_size // self.heads
-        q = q.view(-1, -1, self.heads, head_size).transpose(1, 2)
-        k = k.view(-1, -1, self.heads, head_size).transpose(1, 2)
-        v = k.view(-1, -1, self.heads, head_size).transpose(1, 2)
+        input_shape = x.shape
+        hidden_shape = (*x.shape[:-1], -1, head_size)
+
+        q = q.view(hidden_shape).transpose(1, 2)
+        k = k.view(hidden_shape).transpose(1, 2)
+        v = k.view(hidden_shape).transpose(1, 2)
 
         # output shape (bs, head, seq, head_size)
         output = q @ k.transpose(-2, -1) / math.sqrt(head_size) # bs, head, seq, seq
@@ -218,7 +222,7 @@ class AttentionLayer(nn.Module):
 
         # output of shape (bs, seq, hidden)
         output = output.transpose(2, 1)  # bs, head, seq, head_size
-        output = output.contiguous().view(-1, -1, self.hidden_size)
+        output = output.contiguous().view(input_shape)
 
         output = self.o_proj(output)
         return output
@@ -247,4 +251,5 @@ class MLP(nn.Module):
         act = nn.SiLU()
 
         up_states = up_states * act(gate)
-        return up_states
+
+        return self.down_proj(up_states)
