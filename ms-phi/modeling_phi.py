@@ -44,7 +44,7 @@ class PhiCausalLM(nn.Module):
                 norm=Phi3RMSNorm(config),
             )
         )
-        self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
+        self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False, dtype=torch.bfloat16)
 
     @classmethod
     def from_pretrained(cls):
@@ -98,7 +98,7 @@ class Phi3RMSNorm(nn.Module):
         variance = x.pow(2).mean(-1, keepdim=True)
         x = x * torch.rsqrt(variance + self.rms_norm_eps).to(torch.bfloat16)
 
-        return x * self.weight
+        return self.weight * x
 
 
 class Phi3RotaryPositionEmbedding(nn.Module):
@@ -207,9 +207,9 @@ class AttentionLayer(nn.Module):
         input_shape = x.shape
         hidden_shape = (*x.shape[:-1], -1, head_size)
 
-        q = q.view(hidden_shape).transpose(1, 2)
-        k = k.view(hidden_shape).transpose(1, 2)
-        v = k.view(hidden_shape).transpose(1, 2)
+        q = q.contiguous().view(hidden_shape).transpose(1, 2)
+        k = k.contiguous().view(hidden_shape).transpose(1, 2)
+        v = k.contiguous().view(hidden_shape).transpose(1, 2)
 
         # output shape (bs, head, seq, head_size)
         output = q @ k.transpose(-2, -1) / math.sqrt(head_size) # bs, head, seq, seq
