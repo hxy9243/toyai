@@ -16,6 +16,11 @@ def sample_profile():
             "variant": "BF16",
             "dtype": "auto",
             "quantization": None,
+            "model_card": {
+                "url": "https://huggingface.co/Qwen/Qwen3.5-27B",
+                "config_url": "https://huggingface.co/Qwen/Qwen3.5-27B/blob/main/config.json",
+                "max_position_embeddings": 262144,
+            },
         },
         "parallelism": {
             "tensor_parallel": 1,

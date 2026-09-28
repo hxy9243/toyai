@@ -25,6 +25,11 @@ def valid_profile_dict():
             "variant": "BF16",
             "dtype": "bfloat16",
             "quantization": None,
+            "model_card": {
+                "url": "https://huggingface.co/Qwen/Qwen3.5-27B",
+                "config_url": "https://huggingface.co/Qwen/Qwen3.5-27B/blob/main/config.json",
+                "max_position_embeddings": 32768,
+            },
         },
         "parallelism": {
             "tensor_parallel": 2,
@@ -71,12 +76,25 @@ def test_valid_profile_parsing(valid_profile_dict):
     profile = ExperimentProfile.model_validate(valid_profile_dict)
     assert profile.name == "test-model-sweep"
     assert profile.model.id == "Qwen/Qwen3.5-27B"
+    assert profile.model.model_card.max_position_embeddings == 32768
     assert profile.parallelism.tensor_parallel == 2
 
 
 def test_rejects_server_limit_smaller_than_a_benchmark_request(valid_profile_dict):
     valid_profile_dict["server"]["max_model_len"] = 4096
     with pytest.raises(ValidationError, match="max_model_len"):
+        ExperimentProfile.model_validate(valid_profile_dict)
+
+
+def test_rejects_server_limit_larger_than_published_model_context(valid_profile_dict):
+    valid_profile_dict["server"]["max_model_len"] = 32769
+    with pytest.raises(ValidationError, match="published max_position_embeddings"):
+        ExperimentProfile.model_validate(valid_profile_dict)
+
+
+def test_rejects_non_https_model_card_sources(valid_profile_dict):
+    valid_profile_dict["model"]["model_card"]["config_url"] = "http://example.test/config.json"
+    with pytest.raises(ValidationError, match="HTTPS"):
         ExperimentProfile.model_validate(valid_profile_dict)
 
 
