@@ -28,6 +28,7 @@ analysis = [
 
 [project.scripts]
 llm-serving = "llm_serving.cli:main"
+flash = "llm_serving.flash:main"
 
 [build-system]
 requires = ["hatchling"]

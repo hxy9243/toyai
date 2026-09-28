@@ -81,7 +81,10 @@ class SSHTransport:
             raise RuntimeError(f"Failed to create remote directory '{remote_dir}': {mkdir_res.stderr}")
 
         exclude_set = set(excludes or [])
-        exclude_set.update([".venv", "__pycache__", ".git", ".pytest_cache", "output", "*.pyc"])
+        exclude_set.update([
+            ".venv", "__pycache__", ".git", ".pytest_cache", "output", "*.pyc",
+            ".flash", "runpod.local.yaml", "hosts.local.yaml", ".env",
+        ])
 
         def tar_filter(tarinfo: tarfile.TarInfo) -> Optional[tarfile.TarInfo]:
             for exc in exclude_set:

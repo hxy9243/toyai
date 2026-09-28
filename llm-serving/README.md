@@ -82,3 +82,18 @@ uv run --extra analysis jupyter lab notebooks/qwen35-0.8b-smoke.ipynb
 
 See [notebook usage](docs/notebooks.md) for selecting output directories, configuring
 a remote host, and attaching experiment notes.
+
+## Runpod machines with `flash`
+
+The local `flash` command manages Runpod Pods and exports a host configuration for
+the existing experiment runner. It reads `RUNPOD_API_KEY` from the environment.
+
+```bash
+uv run flash --help
+```
+
+Follow the [Runpod driver guide](docs/flash.md) to configure and plan a machine,
+create it, export its host configuration, and stop it when finished. Stopping
+releases compute but may retain billable storage; this driver does not delete Pods.
+Local provider configuration and `.flash/` state are excluded from Git and remote
+experiment uploads.
