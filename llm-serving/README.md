@@ -64,3 +64,21 @@ Every experiment profile records an official model-card URL, the configuration U
 ```bash
 uv run python -m llm_serving.cli report output/qwen35-27b-bf16/20260902_120000/
 ```
+
+## Qwen 0.8B notebook
+
+The [Qwen smoke notebook](notebooks/qwen35-0.8b-smoke.ipynb) shows the profile,
+serving matrix, saved experiment history, performance charts, and available
+quality results. Run All defaults to local analysis; launching a remote experiment
+requires explicitly enabling its run cell. When no saved runs are available,
+clearly labeled synthetic examples demonstrate the charts.
+
+From this directory:
+
+```bash
+uv sync --extra analysis
+uv run --extra analysis jupyter lab notebooks/qwen35-0.8b-smoke.ipynb
+```
+
+See [notebook usage](docs/notebooks.md) for selecting output directories, configuring
+a remote host, and attaching experiment notes.

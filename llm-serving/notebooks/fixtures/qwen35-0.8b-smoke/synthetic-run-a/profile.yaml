@@ -1,0 +1,7 @@
+schema_version: 1
+name: qwen35-0.8b-smoke
+quality:
+  tasks:
+    - name: gsm8k
+      num_fewshot: 5
+      limit: 20

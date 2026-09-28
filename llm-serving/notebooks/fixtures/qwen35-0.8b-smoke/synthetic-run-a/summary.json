@@ -1,0 +1,28 @@
+{
+  "run_id": "synthetic-run-a",
+  "profile_name": "qwen35-0.8b-smoke",
+  "model_id": "Qwen/Qwen3.5-0.8B",
+  "variant": "BF16",
+  "status": "SUCCESS",
+  "started_at": "2026-01-01T00:00:00+00:00",
+  "finished_at": "2026-01-01T00:05:00+00:00",
+  "duration_seconds": 300.0,
+  "gpu_info": {"model": "Synthetic GPU"},
+  "cases": [
+    {
+      "case_id": "case-00-cg1-cp1-rep0", "cuda_graphs": true, "chunked_prefill": true, "repetition": 0, "is_baseline": true, "status": "SUCCESS",
+      "benchmarks": [
+        {"workload_slug": "short-interactive", "workload_name": "Short interactive", "output_throughput_tok_per_s": 980.0, "request_throughput_req_per_s": 7.65, "ttft": {"p50_ms": 58.0}, "itl": {"p50_ms": 4.3}, "e2e": {"p50_ms": 610.0}, "deltas_vs_baseline": {"output_throughput_tok_per_s_pct": 0.0, "ttft_p50_ms_pct": 0.0, "itl_p50_ms_pct": 0.0, "e2e_p50_ms_pct": 0.0}},
+        {"workload_slug": "decode-heavy", "workload_name": "Decode heavy", "output_throughput_tok_per_s": 1700.0, "request_throughput_req_per_s": 1.66, "ttft": {"p50_ms": 55.0}, "itl": {"p50_ms": 4.7}, "e2e": {"p50_ms": 4850.0}, "deltas_vs_baseline": {"output_throughput_tok_per_s_pct": 0.0, "ttft_p50_ms_pct": 0.0, "itl_p50_ms_pct": 0.0, "e2e_p50_ms_pct": 0.0}}
+      ]
+    },
+    {
+      "case_id": "case-01-cg0-cp1-rep0", "cuda_graphs": false, "chunked_prefill": true, "repetition": 0, "is_baseline": false, "status": "SUCCESS",
+      "benchmarks": [
+        {"workload_slug": "short-interactive", "workload_name": "Short interactive", "output_throughput_tok_per_s": 790.0, "request_throughput_req_per_s": 6.17, "ttft": {"p50_ms": 132.0}, "itl": {"p50_ms": 31.0}, "e2e": {"p50_ms": 4300.0}, "deltas_vs_baseline": {"output_throughput_tok_per_s_pct": -19.39, "ttft_p50_ms_pct": 127.59, "itl_p50_ms_pct": 620.93, "e2e_p50_ms_pct": 604.92}},
+        {"workload_slug": "decode-heavy", "workload_name": "Decode heavy", "output_throughput_tok_per_s": 490.0, "request_throughput_req_per_s": 0.48, "ttft": {"p50_ms": 116.0}, "itl": {"p50_ms": 30.0}, "e2e": {"p50_ms": 31000.0}, "deltas_vs_baseline": {"output_throughput_tok_per_s_pct": -71.18, "ttft_p50_ms_pct": 110.91, "itl_p50_ms_pct": 538.30, "e2e_p50_ms_pct": 539.18}}
+      ]
+    }
+  ],
+  "quality": [{"task_name": "gsm8k", "primary_metric_name": "exact_match,strict-match", "primary_score": 0.45, "stderr": 0.11}]
+}

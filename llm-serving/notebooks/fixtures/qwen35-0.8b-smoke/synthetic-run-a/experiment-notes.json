@@ -1,0 +1,4 @@
+{
+  "hypothesis": "Synthetic example: CUDA graphs improve decode throughput.",
+  "observations": "Synthetic example only; these numbers are not measurements."
+}

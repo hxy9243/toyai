@@ -1,0 +1,21 @@
+{
+  "run_id": "synthetic-run-b",
+  "profile_name": "qwen35-0.8b-smoke",
+  "model_id": "Qwen/Qwen3.5-0.8B",
+  "variant": "BF16",
+  "status": "PARTIAL",
+  "started_at": "2026-01-02T00:00:00+00:00",
+  "finished_at": "2026-01-02T00:03:00+00:00",
+  "duration_seconds": 180.0,
+  "gpu_info": {"model": "Synthetic GPU"},
+  "cases": [
+    {
+      "case_id": "case-00-cg1-cp1-rep0", "cuda_graphs": true, "chunked_prefill": true, "repetition": 0, "is_baseline": true, "status": "SUCCESS",
+      "benchmarks": [
+        {"workload_slug": "short-interactive", "workload_name": "Short interactive", "output_throughput_tok_per_s": 1005.0, "request_throughput_req_per_s": 7.85, "ttft": {"p50_ms": 53.0}, "itl": {"p50_ms": 4.0}, "e2e": {"p50_ms": null}, "deltas_vs_baseline": {"output_throughput_tok_per_s_pct": 0.0, "ttft_p50_ms_pct": 0.0, "itl_p50_ms_pct": 0.0, "e2e_p50_ms_pct": null}}
+      ]
+    },
+    {"case_id": "case-01-cg0-cp1-rep0", "cuda_graphs": false, "chunked_prefill": true, "repetition": 0, "is_baseline": false, "status": "FAILED", "error": "Synthetic startup failure", "benchmarks": []}
+  ],
+  "quality": []
+}
