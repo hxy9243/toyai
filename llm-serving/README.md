@@ -36,6 +36,12 @@ environment:
 
 In host mode the runner starts `vllm serve` directly, writes a PID and `server.log` for each case, and runs benchmarks through that same interpreter. Before the sweep, it installs missing required libraries and validates their imports. The optional `environment` map applies only to direct host processes.
 
+### Model Metadata
+
+Every experiment profile records an official model-card URL, the configuration URL used to read it, and its published `max_position_embeddings` under `model.model_card`. Treat this metadata as the source of truth for model capabilities when creating or revising a profile. The harness validates that the experiment's `server.max_model_len` does not exceed that published maximum.
+
+`server.max_model_len` is an experiment-specific vLLM serving cap, not a claim about the model's architectural context window. It may be smaller when a benchmark intentionally targets a shorter context or the available hardware cannot host the full KV cache.
+
 ### 2. Validate & Plan
 
 ```bash

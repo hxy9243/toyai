@@ -7,12 +7,18 @@ model:
   variant: BF16
   dtype: auto
   quantization: null
+  model_card:
+    url: https://ai.google.dev/gemma/docs/core/model_card_3
+    config_url: https://huggingface.co/google/gemma-3-27b-it/blob/main/config.json
+    max_position_embeddings: 131072
 
 parallelism:
   tensor_parallel: 1
   data_parallel: 1
 
 server:
+  # This benchmark's serving cap is deliberately below the published 131072
+  # context window recorded in model_card.
   max_model_len: 16384
   gpu_memory_utilization: 0.90
   trust_remote_code: false

@@ -20,6 +20,11 @@ def profile_fixture():
             "revision": "main",
             "variant": "BF16",
             "dtype": "auto",
+            "model_card": {
+                "url": "https://huggingface.co/Qwen/Qwen3.5-0.8B",
+                "config_url": "https://huggingface.co/Qwen/Qwen3.5-0.8B/blob/main/config.json",
+                "max_position_embeddings": 262144,
+            },
         },
         "parallelism": {"tensor_parallel": 1, "data_parallel": 1},
         "server": {

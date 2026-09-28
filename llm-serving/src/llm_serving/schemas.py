@@ -42,6 +42,25 @@ def _validate_absolute_path_str(path_str: Optional[str]) -> Optional[str]:
     return path_str
 
 
+class ModelCardConfig(BaseModel):
+    """Published model metadata recorded with a reproducible experiment profile."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    url: str = Field(..., description="Official model card URL")
+    config_url: str = Field(..., description="Official configuration URL used for model limits")
+    max_position_embeddings: int = Field(
+        ..., ge=128, description="Published maximum context length from config_url"
+    )
+
+    @field_validator("url", "config_url")
+    @classmethod
+    def validate_official_url(cls, v: str) -> str:
+        if not re.match(r"^https://[^\s]+$", v):
+            raise ValueError("Model card source URLs must be HTTPS URLs without whitespace.")
+        return v
+
+
 class ModelConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -50,6 +69,9 @@ class ModelConfig(BaseModel):
     variant: str = Field(default="BF16", description="Precision / variant description (e.g. BF16, FP8)")
     dtype: str = Field(default="auto", description="vLLM dtype setting (e.g. auto, bfloat16, float16)")
     quantization: Optional[str] = Field(default=None, description="Quantization method (e.g. awq, gptq, fp8, null)")
+    model_card: ModelCardConfig = Field(
+        ..., description="Official model-card and configuration metadata used as the profile's source of truth"
+    )
 
     @field_validator("id")
     @classmethod
@@ -164,6 +186,11 @@ class ExperimentProfile(BaseModel):
             raise ValueError(
                 f"server.max_model_len must be at least {required_context} to run the "
                 "configured benchmark workloads."
+            )
+        if self.server.max_model_len > self.model.model_card.max_position_embeddings:
+            raise ValueError(
+                "server.max_model_len cannot exceed the model card's published "
+                "max_position_embeddings."
             )
         return self
 
