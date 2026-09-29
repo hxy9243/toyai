@@ -81,6 +81,10 @@ def build_bench_serve_command(
         "--num-warmups", str(workload.num_warmups),
         "--request-rate", str(workload.request_rate),
         "--max-concurrency", str(workload.max_concurrency),
+        # vLLM defaults to p99 only. Request the full set used by the report
+        # so TTFT and ITL p95 are measured, rather than inferred.
+        "--metric-percentiles", "50,90,95,99",
+        "--percentile-metrics", "ttft,itl,tpot,e2el",
         "--seed", "0",
     ]
     if result_filepath:
@@ -92,6 +96,7 @@ def build_bench_serve_command(
 class NormalizedLatencyMetrics:
     p50_ms: Optional[float] = None
     p90_ms: Optional[float] = None
+    p95_ms: Optional[float] = None
     p99_ms: Optional[float] = None
     mean_ms: Optional[float] = None
 
@@ -129,7 +134,7 @@ def _find_metric(data: Dict[str, Any], *candidate_keys: str) -> Optional[float]:
 
 
 def _extract_percentiles(data: Dict[str, Any], prefix: str) -> NormalizedLatencyMetrics:
-    """Extracts p50, p90, p99, mean for a given latency metric family."""
+    """Extracts p50, p90, p95, p99, and mean for a latency metric family."""
     # Look for direct keys like ttft_p50, p50_ttft_ms, median_ttft_ms, ttft.p50, etc.
     sub_dict = data.get(prefix) if isinstance(data.get(prefix), dict) else {}
 
@@ -141,6 +146,10 @@ def _extract_percentiles(data: Dict[str, Any], prefix: str) -> NormalizedLatency
         _find_metric(data, f"{prefix}_p90", f"p90_{prefix}_ms", f"{prefix}_p90_ms", f"p90_{prefix}")
         or _find_metric(sub_dict, "p90", "90%")
     )
+    p95 = (
+        _find_metric(data, f"{prefix}_p95", f"p95_{prefix}_ms", f"{prefix}_p95_ms", f"p95_{prefix}")
+        or _find_metric(sub_dict, "p95", "95%")
+    )
     p99 = (
         _find_metric(data, f"{prefix}_p99", f"p99_{prefix}_ms", f"{prefix}_p99_ms", f"p99_{prefix}")
         or _find_metric(sub_dict, "p99", "99%")
@@ -149,7 +158,13 @@ def _extract_percentiles(data: Dict[str, Any], prefix: str) -> NormalizedLatency
         _find_metric(data, f"{prefix}_mean", f"mean_{prefix}_ms", f"{prefix}_mean_ms", f"mean_{prefix}", f"avg_{prefix}_ms")
         or _find_metric(sub_dict, "mean", "avg")
     )
-    return NormalizedLatencyMetrics(p50_ms=p50, p90_ms=p90, p99_ms=p99, mean_ms=mean)
+    return NormalizedLatencyMetrics(
+        p50_ms=p50,
+        p90_ms=p90,
+        p95_ms=p95,
+        p99_ms=p99,
+        mean_ms=mean,
+    )
 
 
 def normalize_benchmark_output(

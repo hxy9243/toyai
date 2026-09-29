@@ -59,8 +59,46 @@ def test_partial_artifacts_preserve_missing_metrics(tmp_path):
     assert "1 case(s) are incomplete or failed" in run["warnings"]
     assert rows[0]["output_throughput_tok_per_s"] == 101.5
     assert rows[0]["itl_p50_ms"] is None
+    assert rows[0]["ttft_p95_ms"] is None
+    assert rows[0]["itl_p95_ms"] is None
     assert rows[0]["e2e_p50_ms"] is None
     assert rows[0]["output_throughput_delta_pct"] is None
+
+
+def test_performance_rows_includes_p95_latency_and_baseline_delta():
+    rows = performance_rows(
+        [
+            {
+                "run_id": "run",
+                "source": "measured",
+                "status": "SUCCESS",
+                "summary": {
+                    "cases": [
+                        {
+                            "case_id": "case-01",
+                            "status": "SUCCESS",
+                            "benchmarks": [
+                                {
+                                    "workload_slug": "short",
+                                    "ttft": {"p50_ms": 10.0, "p95_ms": 18.0},
+                                    "itl": {"p50_ms": 4.0, "p95_ms": 7.0},
+                                    "deltas_vs_baseline": {
+                                        "ttft_p95_ms_pct": 12.5,
+                                        "itl_p95_ms_pct": 16.67,
+                                    },
+                                }
+                            ],
+                        }
+                    ]
+                },
+            }
+        ]
+    )
+
+    assert rows[0]["ttft_p95_ms"] == 18.0
+    assert rows[0]["itl_p95_ms"] == 7.0
+    assert rows[0]["ttft_p95_delta_pct"] == 12.5
+    assert rows[0]["itl_p95_delta_pct"] == 16.67
 
 
 def test_discovery_includes_manifest_only_failed_run_and_bad_summary(tmp_path):

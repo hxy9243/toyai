@@ -25,9 +25,17 @@ def build_lm_eval_command(
     task: QualityTask,
     base_url: str = "http://localhost:8000/v1/completions",
     output_dir: Optional[str] = None,
+    max_length: Optional[int] = None,
 ) -> List[str]:
     """Builds lm_eval command targeting vLLM OpenAI-compatible local-completions endpoint."""
-    model_args = f"model={model_id},base_url={base_url},num_concurrent=8"
+    model_args_parts = [
+        f"model={model_id}",
+        f"base_url={base_url}",
+        "num_concurrent=8",
+    ]
+    if max_length is not None:
+        model_args_parts.extend([f"max_length={max_length}", "truncate=true"])
+    model_args = ",".join(model_args_parts)
     cmd = [
         "lm_eval",
         "--model", "local-completions",

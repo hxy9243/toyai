@@ -12,7 +12,7 @@
     {
       "case_id": "case-00-cg1-cp1-rep0", "cuda_graphs": true, "chunked_prefill": true, "repetition": 0, "is_baseline": true, "status": "SUCCESS",
       "benchmarks": [
-        {"workload_slug": "short-interactive", "workload_name": "Short interactive", "output_throughput_tok_per_s": 1005.0, "request_throughput_req_per_s": 7.85, "ttft": {"p50_ms": 53.0}, "itl": {"p50_ms": 4.0}, "e2e": {"p50_ms": null}, "deltas_vs_baseline": {"output_throughput_tok_per_s_pct": 0.0, "ttft_p50_ms_pct": 0.0, "itl_p50_ms_pct": 0.0, "e2e_p50_ms_pct": null}}
+        {"workload_slug": "short-interactive", "workload_name": "Short interactive", "output_throughput_tok_per_s": 1005.0, "request_throughput_req_per_s": 7.85, "ttft": {"p50_ms": 53.0, "p95_ms": 80.0}, "itl": {"p50_ms": 4.0, "p95_ms": 5.8}, "e2e": {"p50_ms": null}, "deltas_vs_baseline": {"output_throughput_tok_per_s_pct": 0.0, "ttft_p50_ms_pct": 0.0, "ttft_p95_ms_pct": 0.0, "itl_p50_ms_pct": 0.0, "itl_p95_ms_pct": 0.0, "e2e_p50_ms_pct": null}}
       ]
     },
     {"case_id": "case-01-cg0-cp1-rep0", "cuda_graphs": false, "chunked_prefill": true, "repetition": 0, "is_baseline": false, "status": "FAILED", "error": "Synthetic startup failure", "benchmarks": []}

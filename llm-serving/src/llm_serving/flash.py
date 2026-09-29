@@ -8,6 +8,7 @@ waits for SSH/GPU readiness, and emits a HostInventory consumable by the existin
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import os
 import secrets
@@ -15,8 +16,6 @@ import shlex
 import subprocess
 import sys
 import time
-import urllib.error
-import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,11 +25,15 @@ import yaml
 
 from llm_serving.schemas import HostConfig, HostInventory
 
+try:  # Python 3.11+
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - exercised on Python 3.10
+    import tomli as tomllib
 
-DEFAULT_API_BASE = "https://api.runpod.io/v2"
-DEFAULT_REQUEST_TIMEOUT = 30.0
+
 DEFAULT_READY_TIMEOUT = 900.0
 DEFAULT_POLL_INTERVAL = 5.0
+DEFAULT_RUNPOD_CREDENTIALS_PATH = Path.home() / ".runpod" / "config.toml"
 
 
 class FlashError(RuntimeError):
@@ -38,11 +41,32 @@ class FlashError(RuntimeError):
 
 
 class RunpodAPIError(FlashError):
-    """A Runpod REST API request failed."""
+    """A Runpod SDK request failed."""
 
     def __init__(self, message: str, *, status_code: Optional[int] = None):
         super().__init__(message)
         self.status_code = status_code
+
+
+def load_runpod_api_key(config_path: Path = DEFAULT_RUNPOD_CREDENTIALS_PATH) -> Optional[str]:
+    """Read the default Runpod API key without exposing it in local state or output."""
+    try:
+        with config_path.open("rb") as config_file:
+            config = tomllib.load(config_file)
+    except FileNotFoundError:
+        return None
+    except tomllib.TOMLDecodeError as exc:
+        raise FlashError(f"Invalid Runpod credentials TOML: {config_path}") from exc
+    except OSError as exc:
+        raise FlashError(f"Could not read Runpod credentials TOML: {config_path}: {exc}") from exc
+
+    if not isinstance(config, dict):
+        raise FlashError(f"Runpod credentials TOML must contain a table: {config_path}")
+    default_profile = config.get("default", {})
+    if not isinstance(default_profile, dict):
+        raise FlashError(f"Runpod credentials TOML [default] must be a table: {config_path}")
+    api_key = default_profile.get("api_key", config.get("api_key"))
+    return api_key.strip() if isinstance(api_key, str) and api_key.strip() else None
 
 
 def _utc_now() -> str:
@@ -87,7 +111,10 @@ def load_flash_config(path: Path) -> dict[str, Any]:
         return False
 
     if contains_api_key(raw):
-        raise FlashError("API credentials must only be supplied through RUNPOD_API_KEY")
+        raise FlashError(
+            "API credentials must only be supplied through RUNPOD_API_KEY or "
+            f"{DEFAULT_RUNPOD_CREDENTIALS_PATH}"
+        )
 
     machine = _require(raw, "machine", dict, "config")
     host = _require(raw, "host", dict, "config")
@@ -112,10 +139,24 @@ def load_flash_config(path: Path) -> dict[str, Any]:
         raise FlashError("machine.volume_gb must be zero or at least 10 GB")
     if volume_gb and machine.get("network_volume_id"):
         raise FlashError("machine.volume_gb and machine.network_volume_id are mutually exclusive")
-    if machine.get("allowed_cuda_versions") and machine.get("min_cuda_version"):
+    if machine.get("min_cuda_version") is not None:
         raise FlashError(
-            "machine.allowed_cuda_versions and machine.min_cuda_version are mutually exclusive"
+            "machine.min_cuda_version is not supported by Runpod's Python SDK; "
+            "use machine.allowed_cuda_versions instead"
         )
+    data_center_ids = machine.get("data_center_ids")
+    if data_center_ids is not None and (
+        not isinstance(data_center_ids, list)
+        or len(data_center_ids) != 1
+        or not isinstance(data_center_ids[0], str)
+        or not data_center_ids[0].strip()
+    ):
+        raise FlashError(
+            "machine.data_center_ids must contain exactly one data-center ID when using "
+            "Runpod's Python SDK"
+        )
+    if machine.get("global_networking") is not None:
+        raise FlashError("machine.global_networking is not supported by Runpod's Python SDK")
     ports = machine.get("ports", ["22/tcp"])
     if not isinstance(ports, list) or "22/tcp" not in ports:
         raise FlashError("machine.ports must include 22/tcp so the harness can connect")
@@ -132,7 +173,6 @@ def load_flash_config(path: Path) -> dict[str, Any]:
         raise FlashError(f"Invalid host settings: {exc}") from exc
 
     for name, default in (
-        ("request_timeout_seconds", DEFAULT_REQUEST_TIMEOUT),
         ("readiness_timeout_seconds", DEFAULT_READY_TIMEOUT),
         ("poll_interval_seconds", DEFAULT_POLL_INTERVAL),
     ):
@@ -140,120 +180,153 @@ def load_flash_config(path: Path) -> dict[str, Any]:
     return raw
 
 
-def build_create_payload(config: Mapping[str, Any], request_id: str) -> dict[str, Any]:
-    """Translate local snake_case settings to the documented Runpod API payload."""
+def build_create_kwargs(config: Mapping[str, Any], request_id: str) -> dict[str, Any]:
+    """Translate local settings to the official ``runpod.create_pod`` arguments."""
     machine = config["machine"]
     base_name = str(machine.get("name", "toyai-flash")).strip()
-    gpu: dict[str, Any] = {
-        "id": machine["gpu_type_ids"][0],
-        "count": int(machine.get("gpu_count", 1)),
-    }
-    gpu_optional = {
-        "allowed_cuda_versions": "allowedCudaVersions",
-        "min_cuda_version": "minCudaVersion",
-        "min_vcpu_per_gpu": "minVcpuCountPerGpu",
-        "min_ram_per_gpu": "minRamPerGpu",
-    }
-    for local_name, api_name in gpu_optional.items():
-        if machine.get(local_name) is not None:
-            gpu[api_name] = machine[local_name]
-
-    payload: dict[str, Any] = {
+    create_kwargs: dict[str, Any] = {
         "name": f"{base_name}-{request_id}",
-        "image": machine["image_name"],
-        "gpu": gpu,
-        "disk": int(machine.get("container_disk_gb", 50)),
-        "cloud": str(machine.get("cloud_type", "SECURE")).upper(),
-        "ports": list(machine.get("ports", ["22/tcp"])),
-        "startSsh": True,
+        "image_name": machine["image_name"],
+        "gpu_type_id": machine["gpu_type_ids"][0],
+        "gpu_count": int(machine.get("gpu_count", 1)),
+        "container_disk_in_gb": int(machine.get("container_disk_gb", 50)),
+        "cloud_type": str(machine.get("cloud_type", "SECURE")).upper(),
+        "ports": ",".join(str(port) for port in machine.get("ports", ["22/tcp"])),
+        # The released SDK uses this to preserve an externally reachable SSH
+        # endpoint. The local readiness check relies on that direct connection.
+        "support_public_ip": True,
+        "start_ssh": True,
     }
+    optional = {
+        "allowed_cuda_versions": "allowed_cuda_versions",
+        "min_vcpu_per_gpu": "min_vcpu_count",
+        "min_ram_per_gpu": "min_memory_in_gb",
+    }
+    for local_name, sdk_name in optional.items():
+        if machine.get(local_name) is not None:
+            create_kwargs[sdk_name] = machine[local_name]
+
     mount_path = str(machine.get("volume_mount_path", "/workspace"))
     if machine.get("network_volume_id"):
-        payload["mounts"] = {
-            "network": [{"volumeId": machine["network_volume_id"], "path": mount_path}]
-        }
+        create_kwargs["network_volume_id"] = machine["network_volume_id"]
+        create_kwargs["volume_mount_path"] = mount_path
     elif machine.get("volume_gb", 0):
-        payload["mounts"] = {
-            "persistent": {"size": int(machine["volume_gb"]), "path": mount_path}
-        }
+        create_kwargs["volume_in_gb"] = int(machine["volume_gb"])
+        create_kwargs["volume_mount_path"] = mount_path
     if machine.get("data_center_ids") is not None:
-        payload["dataCenterIds"] = machine["data_center_ids"]
-    if machine.get("global_networking") is not None:
-        payload["globalNetworking"] = bool(machine["global_networking"])
-    return payload
+        create_kwargs["data_center_id"] = machine["data_center_ids"][0]
+    return create_kwargs
 
 
 class RunpodClient:
-    """Tiny stdlib-only client for the Pod REST API."""
+    """Small adapter around the official Runpod Python SDK's Pod methods."""
 
     def __init__(
         self,
         api_key: Optional[str] = None,
         *,
-        base_url: str = DEFAULT_API_BASE,
-        timeout: float = DEFAULT_REQUEST_TIMEOUT,
-        opener: Callable[..., Any] = urllib.request.urlopen,
+        sdk: Optional[Any] = None,
+        credentials_path: Path = DEFAULT_RUNPOD_CREDENTIALS_PATH,
     ) -> None:
-        self.api_key = api_key if api_key is not None else os.environ.get("RUNPOD_API_KEY")
+        self.api_key = api_key or os.environ.get("RUNPOD_API_KEY") or load_runpod_api_key(credentials_path)
         if not self.api_key:
-            raise FlashError("RUNPOD_API_KEY is required for Runpod API operations")
-        self.base_url = base_url.rstrip("/")
-        self.timeout = timeout
-        self._opener = opener
+            raise FlashError(
+                "Runpod API key not found. Set RUNPOD_API_KEY or add default.api_key to "
+                f"{credentials_path}"
+            )
+        if sdk is None:
+            try:
+                sdk = importlib.import_module("runpod")
+            except ImportError as exc:  # pragma: no cover - enforced by package dependency
+                raise FlashError("Runpod SDK is not installed; run `uv sync` from llm-serving/") from exc
+        self._sdk = sdk
+        # The official Pod SDK uses this module-level credential for lifecycle calls.
+        self._sdk.api_key = self.api_key
 
-    def _request(self, method: str, path: str, payload: Optional[Mapping[str, Any]] = None) -> dict[str, Any]:
-        body = json.dumps(payload).encode("utf-8") if payload is not None else None
-        request = urllib.request.Request(
-            f"{self.base_url}{path}",
-            data=body,
-            method=method,
-            headers={
-                "Authorization": f"Bearer {self.api_key}",
-                "Accept": "application/json",
-                **({"Content-Type": "application/json"} if body is not None else {}),
-            },
-        )
+    @staticmethod
+    def _status_code(exc: Exception) -> Optional[int]:
+        for value in (getattr(exc, "status_code", None), getattr(exc, "status", None)):
+            if isinstance(value, int):
+                return value
+        response = getattr(exc, "response", None)
+        value = getattr(response, "status_code", None)
+        return value if isinstance(value, int) else None
+
+    def _call(
+        self,
+        operation: str,
+        callable_: Callable[..., Any],
+        *args: Any,
+        missing_status_code: Optional[int] = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
         try:
-            with self._opener(request, timeout=self.timeout) as response:
-                raw = response.read()
-                if not raw:
-                    return {}
-                result = json.loads(raw.decode("utf-8"))
-                if not isinstance(result, dict):
-                    raise RunpodAPIError("Runpod returned an unexpected non-object response")
-                return result
-        except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")[:1000]
+            result = callable_(*args, **kwargs)
+        except Exception as exc:
             raise RunpodAPIError(
-                f"Runpod API {method} {path} failed with HTTP {exc.code}: {detail}",
-                status_code=exc.code,
+                f"Runpod SDK {operation} failed: {exc}", status_code=self._status_code(exc)
             ) from exc
-        except urllib.error.URLError as exc:
-            recovery = ""
-            if method == "POST" and path == "/pods":
-                recovery = (
-                    " Do not repeat create blindly; reconcile the unique Pod name "
-                    "in the Runpod console first."
-                )
+        if result is None and missing_status_code is not None:
             raise RunpodAPIError(
-                f"Runpod API {method} {path} did not return a definite result: {exc.reason}.{recovery}"
-            ) from exc
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise RunpodAPIError(f"Runpod API {method} {path} returned invalid JSON") from exc
+                f"Runpod SDK {operation} did not find the requested Pod",
+                status_code=missing_status_code,
+            )
+        if not isinstance(result, Mapping):
+            raise RunpodAPIError(
+                f"Runpod SDK {operation} returned an invalid Pod response; reconcile in the Runpod console"
+            )
+        return self._normalize_pod(result)
 
-    def create_pod(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+    @staticmethod
+    def _normalize_pod(pod: Mapping[str, Any]) -> dict[str, Any]:
+        """Normalize released-SDK GraphQL responses to the harness's Pod shape.
+
+        The current PyPI SDK exposes ``desiredStatus`` and ``runtime.ports``;
+        the newer Pod API exposes ``status`` and ``ssh.direct``. Preserve the
+        latter when present, while deriving it from the former for a direct SSH
+        port mapping. The configured host SSH user remains authoritative when
+        the SDK response does not include one.
+        """
+        normalized = dict(pod)
+        if not normalized.get("status") and normalized.get("desiredStatus"):
+            normalized["status"] = normalized["desiredStatus"]
+        ssh = normalized.get("ssh")
+        direct = ssh.get("direct") if isinstance(ssh, Mapping) else None
+        if isinstance(direct, Mapping):
+            return normalized
+
+        runtime = normalized.get("runtime")
+        ports = runtime.get("ports") if isinstance(runtime, Mapping) else None
+        if not isinstance(ports, list):
+            return normalized
+        for port in ports:
+            if not isinstance(port, Mapping) or str(port.get("privatePort")) != "22":
+                continue
+            host = port.get("ip")
+            public_port = port.get("publicPort")
+            try:
+                port_number = int(public_port)
+            except (TypeError, ValueError):
+                continue
+            if isinstance(host, str) and host and port_number > 0:
+                normalized["ssh"] = {"direct": {"host": host, "port": port_number}}
+                break
+        return normalized
+
+    def create_pod(self, create_kwargs: Mapping[str, Any]) -> dict[str, Any]:
         # Deliberately one attempt. A retry after an ambiguous network failure could
         # create a second billable Pod.
-        return self._request("POST", "/pods", payload)
+        return self._call("create_pod", self._sdk.create_pod, **dict(create_kwargs))
 
     def get_pod(self, pod_id: str) -> dict[str, Any]:
-        return self._request("GET", f"/pods/{pod_id}")
+        result = self._call("get_pod", self._sdk.get_pod, pod_id, missing_status_code=404)
+        return result
 
     def stop_pod(self, pod_id: str) -> dict[str, Any]:
-        return self._request("POST", f"/pods/{pod_id}/action", {"action": "stop"})
+        return self._call("stop_pod", self._sdk.stop_pod, pod_id)
 
-    def start_pod(self, pod_id: str) -> dict[str, Any]:
-        return self._request("POST", f"/pods/{pod_id}/action", {"action": "start"})
+    def start_pod(self, pod_id: str, gpu_count: int) -> dict[str, Any]:
+        return self._call("resume_pod", self._sdk.resume_pod, pod_id, gpu_count)
 
 
 class StateStore:
@@ -315,7 +388,9 @@ def resolve_state_dir(config: Mapping[str, Any], config_path: Path) -> Path:
 
 
 def pod_status(pod: Mapping[str, Any]) -> str:
-    return str(pod.get("status") or pod.get("last_status") or "UNKNOWN").upper()
+    return str(
+        pod.get("status") or pod.get("last_status") or pod.get("desiredStatus") or "UNKNOWN"
+    ).upper()
 
 
 def _validate_pod_id(pod_id: str) -> str:
@@ -333,13 +408,14 @@ def resolve_host_config(config: Mapping[str, Any], pod: Mapping[str, Any]) -> tu
     ssh_host = direct.get("host")
     ssh_port = direct.get("port")
     ssh_user = direct.get("username")
-    if not pod_id or not isinstance(ssh_host, str) or not ssh_host or not ssh_port or not ssh_user:
+    if not pod_id or not isinstance(ssh_host, str) or not ssh_host or not ssh_port:
         raise FlashError(f"Pod {pod_id or '<unknown>'} has incomplete direct SSH details")
     host_raw = dict(config["host"])
     alias = str(host_raw.pop("alias", "runpod"))
     host_raw["ssh_target"] = ssh_host
     host_raw["ssh_port"] = int(ssh_port)
-    host_raw["ssh_user"] = str(ssh_user)
+    if isinstance(ssh_user, str) and ssh_user:
+        host_raw["ssh_user"] = ssh_user
     if "gpu_ids" not in host_raw:
         host_raw["gpu_ids"] = list(range(int(config["machine"].get("gpu_count", 1))))
     try:
@@ -429,24 +505,22 @@ def create(
     driver = config.get("driver", {})
     store = StateStore(resolve_state_dir(config, config_path))
     request_id = f"{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{secrets.token_hex(3)}"
-    payload = build_create_payload(config, request_id)
+    create_kwargs = build_create_kwargs(config, request_id)
     request_state: dict[str, Any] = {
         "request_id": request_id,
         "created_at": _utc_now(),
         "outcome": "pending",
         "config_path": str(config_path),
-        "pod_name": payload["name"],
-        "payload": payload,
+        "pod_name": create_kwargs["name"],
+        "create_kwargs": create_kwargs,
     }
     store.write_request(request_id, request_state)
-    api = client or RunpodClient(
-        timeout=float(driver.get("request_timeout_seconds", DEFAULT_REQUEST_TIMEOUT)),
-    )
+    api = client or RunpodClient()
     try:
-        pod = api.create_pod(payload)
+        pod = api.create_pod(create_kwargs)
     except RunpodAPIError as exc:
-        # A server/gateway error can arrive after a billable Pod was created.
-        # Request timeouts are ambiguous too, even with an HTTP response.
+        # A provider error can arrive after a billable Pod was created. Timeouts
+        # and server failures are ambiguous, even when surfaced by the SDK.
         definite_rejection = (
             exc.status_code is not None and 400 <= exc.status_code < 500
             and exc.status_code != 408
@@ -456,7 +530,7 @@ def create(
         store.write_request(request_id, request_state)
         if not definite_rejection:
             raise RunpodAPIError(
-                f"{exc}. Create outcome is uncertain; reconcile Pod name {payload['name']!r} "
+                f"{exc}. Create outcome is uncertain; reconcile Pod name {create_kwargs['name']!r} "
                 "in the Runpod console before another create request.",
                 status_code=exc.status_code,
             ) from exc
@@ -477,7 +551,7 @@ def create(
         store.write_request(request_id, request_state)
     except OSError as exc:
         raise FlashError(
-            f"Runpod created Pod {pod_id} ({payload['name']}) but local request state could not be "
+            f"Runpod created Pod {pod_id} ({create_kwargs['name']}) but local request state could not be "
             f"updated: {exc}. Reconcile and stop it in the Runpod console; do not create another Pod."
         ) from exc
 
@@ -485,7 +559,7 @@ def create(
         "pod_id": pod_id,
         "owned": True,
         "request_id": request_id,
-        "pod_name": payload["name"],
+        "pod_name": create_kwargs["name"],
         "config_path": str(config_path),
         "created_at": _utc_now(),
         "last_observed_at": _utc_now(),
@@ -496,7 +570,7 @@ def create(
         state_path = store.write_pod(pod_id, state)
     except OSError as exc:
         raise FlashError(
-            f"Runpod created Pod {pod_id} ({payload['name']}) but local Pod state could not be "
+            f"Runpod created Pod {pod_id} ({create_kwargs['name']}) but local Pod state could not be "
             f"written: {exc}. Reconcile and stop it in the Runpod console; do not create another Pod."
         ) from exc
 
@@ -539,14 +613,11 @@ def refresh_status(
 ) -> tuple[dict[str, Any], dict[str, Any], Path]:
     config_path = config_path.resolve()
     config = load_flash_config(config_path)
-    driver = config.get("driver", {})
     store = StateStore(resolve_state_dir(config, config_path))
     selected = pod_id or store.latest_pod_id()
     _validate_pod_id(selected)
     state = store.read_pod(selected)
-    api = client or RunpodClient(
-        timeout=float(driver.get("request_timeout_seconds", DEFAULT_REQUEST_TIMEOUT)),
-    )
+    api = client or RunpodClient()
     pod = api.get_pod(selected)
     state.update(last_observed_at=_utc_now(), last_status=pod_status(pod))
     path = store.write_pod(selected, state)
@@ -561,14 +632,11 @@ def stop(
 ) -> tuple[dict[str, Any], bool]:
     config_path = config_path.resolve()
     config = load_flash_config(config_path)
-    driver = config.get("driver", {})
     store = StateStore(resolve_state_dir(config, config_path))
     selected = pod_id
     _validate_pod_id(selected)
     state = store.read_pod(selected)
-    api = client or RunpodClient(
-        timeout=float(driver.get("request_timeout_seconds", DEFAULT_REQUEST_TIMEOUT)),
-    )
+    api = client or RunpodClient()
     try:
         pod = api.get_pod(selected)
     except RunpodAPIError as exc:
@@ -596,7 +664,7 @@ def stop(
         state.update(last_observed_at=_utc_now(), last_status="STOP_OUTCOME_UNKNOWN")
         store.write_pod(selected, state)
         raise RunpodAPIError(
-            f"Runpod accepted the stop request for Pod {selected} but returned an invalid v2 Pod "
+            f"Runpod SDK accepted the stop request for Pod {selected} but returned an invalid Pod "
             "response. Do not repeat the action blindly; run status to reconcile its state."
         )
     state.update(last_observed_at=_utc_now(), last_status=pod_status(result))
@@ -619,9 +687,7 @@ def start(
     selected = pod_id
     _validate_pod_id(selected)
     state = store.read_pod(selected)
-    api = client or RunpodClient(
-        timeout=float(driver.get("request_timeout_seconds", DEFAULT_REQUEST_TIMEOUT)),
-    )
+    api = client or RunpodClient()
     pod = api.get_pod(selected)
     status = pod_status(pod)
     if status == "TERMINATED":
@@ -633,7 +699,7 @@ def start(
     else:
         raise FlashError(f"Pod {selected} has unknown state {status}; refusing to send start")
     if changed:
-        pod = api.start_pod(selected)
+        pod = api.start_pod(selected, int(config["machine"].get("gpu_count", 1)))
     host_path: Optional[Path] = None
     if wait:
         try:
@@ -692,13 +758,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     try:
         if args.command == "plan":
             config = load_flash_config(args.config)
-            payload = build_create_payload(config, "<unique-request-id>")
+            create_kwargs = build_create_kwargs(config, "<unique-request-id>")
             output = {
-                "api": f"{DEFAULT_API_BASE}/pods",
-                "method": "POST",
-                "payload": payload,
+                "sdk": "runpod.create_pod",
+                "create_kwargs": create_kwargs,
                 "state_dir": str(resolve_state_dir(config, args.config.resolve())),
-                "credentials": "RUNPOD_API_KEY environment variable (not read during plan)",
+                "credentials": (
+                    "RUNPOD_API_KEY override or ~/.runpod/config.toml [default].api_key "
+                    "(not read during plan)"
+                ),
             }
             print(yaml.safe_dump(output, sort_keys=False).rstrip())
             return 0

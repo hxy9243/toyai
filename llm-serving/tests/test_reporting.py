@@ -80,9 +80,9 @@ def test_generate_summary_data_and_csv(dummy_profile, dummy_host):
                     "workload_name": "Short interactive",
                     "output_throughput_tok_per_s": 1000.0,
                     "request_throughput_req_per_s": 8.0,
-                    "ttft": {"p50_ms": 10.0, "p90_ms": 15.0, "p99_ms": 20.0},
+                    "ttft": {"p50_ms": 10.0, "p90_ms": 15.0, "p95_ms": 18.0, "p99_ms": 20.0},
                     "tpot": {"p50_ms": 5.0, "p90_ms": 8.0, "p99_ms": 10.0},
-                    "itl": {"p50_ms": 5.0, "p90_ms": 8.0, "p99_ms": 10.0},
+                    "itl": {"p50_ms": 5.0, "p90_ms": 8.0, "p95_ms": 9.0, "p99_ms": 10.0},
                     "e2e": {"p50_ms": 500.0, "p90_ms": 600.0, "p99_ms": 700.0},
                 }
             ],
@@ -100,9 +100,9 @@ def test_generate_summary_data_and_csv(dummy_profile, dummy_host):
                     "workload_name": "Short interactive",
                     "output_throughput_tok_per_s": 850.0,
                     "request_throughput_req_per_s": 6.8,
-                    "ttft": {"p50_ms": 12.0, "p90_ms": 18.0, "p99_ms": 25.0},
+                    "ttft": {"p50_ms": 12.0, "p90_ms": 18.0, "p95_ms": 22.0, "p99_ms": 25.0},
                     "tpot": {"p50_ms": 5.5, "p90_ms": 8.5, "p99_ms": 11.0},
-                    "itl": {"p50_ms": 5.5, "p90_ms": 8.5, "p99_ms": 11.0},
+                    "itl": {"p50_ms": 5.5, "p90_ms": 8.5, "p95_ms": 10.0, "p99_ms": 11.0},
                     "e2e": {"p50_ms": 550.0, "p90_ms": 650.0, "p99_ms": 750.0},
                 }
             ],
@@ -126,15 +126,21 @@ def test_generate_summary_data_and_csv(dummy_profile, dummy_host):
 
     case1_bench = summary["cases"][1]["benchmarks"][0]
     assert case1_bench["deltas_vs_baseline"]["output_throughput_tok_per_s_pct"] == -15.0
+    assert case1_bench["deltas_vs_baseline"]["ttft_p95_ms_pct"] == 22.22
+    assert case1_bench["deltas_vs_baseline"]["itl_p95_ms_pct"] == 11.11
 
     csv_out = export_summary_csv(summary)
     assert "case-00-cg1-cp1-rep0" in csv_out
     assert "case-01-cg1-cp0-rep0" in csv_out
     assert "-15.0" in csv_out
+    assert "ttft_p95_ms" in csv_out
+    assert "itl_p95_ms" in csv_out
 
     report_md = render_markdown_report(summary, manifest)
     assert "# Experiment Report: `qwen35-27b-bf16`" in report_md
     assert "NVIDIA H100" in report_md
     assert "Short interactive" in report_md
+    assert "TTFT p95 (ms)" in report_md
+    assert "ITL p95 (ms)" in report_md
     assert "Quality Evaluation (lm-evaluation-harness)" in report_md
     assert "0.8250" in report_md

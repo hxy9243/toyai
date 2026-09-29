@@ -21,16 +21,18 @@ with the same name.
    `host.ssh_key_path` in the local config.
 2. Copy `runpod.example.yaml` to `runpod.local.yaml` and review the GPU type,
    storage, image, SSH key path, and expected GPU model. This initial slice
-   supports image-based API v2 creates with one exact GPU type. The image must
-   honor Runpod's `startSsh` setup, expose `22/tcp`, and accept the account key.
-3. Export the API key in the shell that runs the driver:
+   uses the official Python SDK for image-based creates with one exact GPU type. The image must
+   honor Runpod's `start_ssh` setup, expose `22/tcp`, and accept the account key.
+3. The driver reads the default API key from `~/.runpod/config.toml`:
 
-   ```bash
-   export RUNPOD_API_KEY=...
+   ```toml
+   [default]
+   api_key = "..."
    ```
 
-   The key is read only from the environment. It is never written to config,
-   lifecycle state, a generated host inventory, or command output.
+   `RUNPOD_API_KEY` remains an explicit environment override for automation. The
+   key is never written to lifecycle state, a generated host inventory, or
+   command output.
 4. For `execution_mode: host`, make sure the Pod has Python 3.10 or newer plus
    the runtime expected by this repository. The current harness container pins
    vLLM 0.28.0 and lm-eval 0.4.12, so a reusable Pod image should install
@@ -126,12 +128,11 @@ retrieving results and deciding that the retained data is no longer needed.
   billing, select by current price, transfer artifacts, or delete Pods. Review
   the plan and Runpod console before every paid run.
 
-The REST contract used here follows Runpod's current
-[API v2 Pod create reference](https://docs.runpod.io/api-reference-v2/pods/create-a-pod),
-[Pod lookup reference](https://docs.runpod.io/api-reference-v2/pods/get-a-pod), and
-[state-transition reference](https://docs.runpod.io/api-reference-v2/pods/trigger-a-pod-state-transition):
-create with `POST /v2/pods`, inspect with `GET /v2/pods/{id}`, start or stop with
-`POST /v2/pods/{id}/action`, and resolve the harness connection from
-`ssh.direct`. Runpod's
+`flash` uses the official [Runpod Python SDK](https://github.com/runpod/runpod-python)
+for its Pod lifecycle calls: `create_pod`, `get_pod`, `stop_pod`, and `resume_pod`.
+It resolves the harness connection from either `ssh.direct` or the released
+SDK's `runtime.ports` response (the `22/tcp` public mapping). The plan prints
+the exact SDK keyword arguments that will be used, without loading credentials.
+The driver does not make custom HTTP calls. Runpod's
 [zero-GPU restart guidance](https://docs.runpod.io/pods/troubleshooting/zero-gpus)
 explains the capacity and storage behavior after a Pod is stopped.

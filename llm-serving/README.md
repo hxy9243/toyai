@@ -25,11 +25,11 @@ Copy `hosts.example.yaml` to `hosts.local.yaml` (gitignored):
 cp hosts.example.yaml hosts.local.yaml
 ```
 
-Update your remote host SSH target, GPU IDs, and cache paths. Set `execution_mode: host` to run without Docker. The runner installs missing `vllm` and, when quality tasks are enabled, `lm-eval[api]` into `python_executable`; it does not upgrade packages already present. Docker remains the default.
+Update your remote host SSH target, GPU IDs, and cache paths. Set `execution_mode: host` to run without Docker. The runner creates and reuses `<remote_root>/.llm-serving-venv` by default, using `python_executable` only as its bootstrap interpreter. It installs missing `vllm` and, when quality tasks are enabled, `lm-eval[api]` there. Docker remains the default.
 
 ```yaml
 execution_mode: host
-python_executable: /workspace/.venv/bin/python
+python_executable: python3  # bootstrap interpreter for .llm-serving-venv
 environment:
   VLLM_USE_FLASHINFER_SAMPLER: "0"
 ```

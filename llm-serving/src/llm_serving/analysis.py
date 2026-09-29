@@ -16,7 +16,9 @@ PERFORMANCE_METRICS = {
     "output_throughput_tok_per_s": ("Output throughput", "tokens/s", True),
     "request_throughput_req_per_s": ("Request throughput", "requests/s", True),
     "ttft_p50_ms": ("TTFT p50", "ms", False),
+    "ttft_p95_ms": ("TTFT p95", "ms", False),
     "itl_p50_ms": ("ITL p50", "ms", False),
+    "itl_p95_ms": ("ITL p95", "ms", False),
     "e2e_p50_ms": ("End-to-end p50", "ms", False),
 }
 
@@ -184,11 +186,15 @@ def performance_rows(runs: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
                         "output_throughput_tok_per_s": benchmark.get("output_throughput_tok_per_s"),
                         "request_throughput_req_per_s": benchmark.get("request_throughput_req_per_s"),
                         "ttft_p50_ms": _percentile(benchmark, "ttft"),
+                        "ttft_p95_ms": _percentile(benchmark, "ttft", "p95_ms"),
                         "itl_p50_ms": _percentile(benchmark, "itl"),
+                        "itl_p95_ms": _percentile(benchmark, "itl", "p95_ms"),
                         "e2e_p50_ms": _percentile(benchmark, "e2e"),
                         "output_throughput_delta_pct": deltas.get("output_throughput_tok_per_s_pct"),
                         "ttft_delta_pct": deltas.get("ttft_p50_ms_pct"),
+                        "ttft_p95_delta_pct": deltas.get("ttft_p95_ms_pct"),
                         "itl_delta_pct": deltas.get("itl_p50_ms_pct"),
+                        "itl_p95_delta_pct": deltas.get("itl_p95_ms_pct"),
                         "e2e_delta_pct": deltas.get("e2e_p50_ms_pct"),
                     }
                 )
@@ -249,7 +255,14 @@ def comparable_quality_groups(rows: Iterable[Mapping[str, Any]]) -> dict[tuple[s
 
 def plot_performance(
     rows: Sequence[Mapping[str, Any]],
-    metrics: Sequence[str] = ("output_throughput_tok_per_s", "ttft_p50_ms", "itl_p50_ms", "e2e_p50_ms"),
+    metrics: Sequence[str] = (
+        "output_throughput_tok_per_s",
+        "ttft_p50_ms",
+        "ttft_p95_ms",
+        "itl_p50_ms",
+        "itl_p95_ms",
+        "e2e_p50_ms",
+    ),
 ):
     """Plot available performance metrics and explicitly mark unavailable panels."""
 
@@ -284,10 +297,12 @@ def plot_baseline_deltas(rows: Sequence[Mapping[str, Any]]):
     fields = (
         ("output_throughput_delta_pct", "Output throughput"),
         ("ttft_delta_pct", "TTFT p50"),
+        ("ttft_p95_delta_pct", "TTFT p95"),
         ("itl_delta_pct", "ITL p50"),
+        ("itl_p95_delta_pct", "ITL p95"),
         ("e2e_delta_pct", "End-to-end p50"),
     )
-    fig, axes = plt.subplots(1, len(fields), figsize=(18, 4), squeeze=False)
+    fig, axes = plt.subplots(1, len(fields), figsize=(5 * len(fields), 4), squeeze=False)
     non_baseline = [row for row in rows if not row.get("is_baseline")]
     for ax, (field, title) in zip(axes[0], fields):
         available = [row for row in non_baseline if row.get(field) is not None]

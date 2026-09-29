@@ -9,9 +9,10 @@ from llm_serving.flash import (
     RunpodAPIError,
     RunpodClient,
     StateStore,
-    build_create_payload,
+    build_create_kwargs,
     create,
     load_flash_config,
+    load_runpod_api_key,
     resolve_host_config,
     start,
     stop,
@@ -61,11 +62,11 @@ class FakeClient:
         self.stop_calls = 0
         self.start_calls = 0
 
-    def create_pod(self, payload):
+    def create_pod(self, create_kwargs):
         self.create_calls += 1
         if self.create_error:
             raise self.create_error
-        self.pod = {**self.pod, "name": payload["name"]}
+        self.pod = {**self.pod, "name": create_kwargs["name"]}
         return dict(self.pod)
 
     def get_pod(self, pod_id):
@@ -77,8 +78,34 @@ class FakeClient:
         self.pod["status"] = "EXITED"
         return dict(self.pod)
 
-    def start_pod(self, pod_id):
+    def start_pod(self, pod_id, gpu_count):
+        assert gpu_count == 1
         self.start_calls += 1
+        self.pod["status"] = "RUNNING"
+        return dict(self.pod)
+
+
+class FakeRunpodSDK:
+    def __init__(self):
+        self.api_key = None
+        self.calls = []
+        self.pod = {"id": "pod-123", "status": "RUNNING"}
+
+    def create_pod(self, **kwargs):
+        self.calls.append(("create_pod", kwargs))
+        return {**self.pod, "name": kwargs["name"]}
+
+    def get_pod(self, pod_id):
+        self.calls.append(("get_pod", pod_id))
+        return dict(self.pod) if pod_id == self.pod["id"] else None
+
+    def stop_pod(self, pod_id):
+        self.calls.append(("stop_pod", pod_id))
+        self.pod["status"] = "EXITED"
+        return dict(self.pod)
+
+    def resume_pod(self, pod_id, gpu_count):
+        self.calls.append(("resume_pod", pod_id, gpu_count))
         self.pod["status"] = "RUNNING"
         return dict(self.pod)
 
@@ -94,18 +121,25 @@ def ready_pod(status="RUNNING"):
     }
 
 
-def test_plan_payload_uses_documented_api_fields_and_no_credentials(tmp_path):
+def test_plan_uses_sdk_create_arguments_and_no_credentials(tmp_path):
     path = write_config(tmp_path)
     config = load_flash_config(path)
-    payload = build_create_payload(config, "request-1")
+    create_kwargs = build_create_kwargs(config, "request-1")
 
-    assert payload["name"] == "test-pod-request-1"
-    assert payload["image"] == "runpod/pytorch:test"
-    assert payload["gpu"] == {"id": "NVIDIA GeForce RTX 4090", "count": 1}
-    assert payload["mounts"] == {"persistent": {"size": 20, "path": "/workspace"}}
-    assert payload["ports"] == ["22/tcp"]
-    assert payload["startSsh"] is True
-    assert not any("key" in key.lower() or "token" in key.lower() for key in payload)
+    assert create_kwargs == {
+        "name": "test-pod-request-1",
+        "image_name": "runpod/pytorch:test",
+        "gpu_type_id": "NVIDIA GeForce RTX 4090",
+        "gpu_count": 1,
+        "container_disk_in_gb": 20,
+        "cloud_type": "SECURE",
+        "ports": "22/tcp",
+        "support_public_ip": True,
+        "start_ssh": True,
+        "volume_in_gb": 20,
+        "volume_mount_path": "/workspace",
+    }
+    assert not any("key" in key.lower() or "token" in key.lower() for key in create_kwargs)
 
 
 def test_config_rejects_embedded_api_key(tmp_path):
@@ -114,7 +148,7 @@ def test_config_rejects_embedded_api_key(tmp_path):
     config["api_key"] = "secret"
     path.write_text(yaml.safe_dump(config))
 
-    with pytest.raises(FlashError, match="RUNPOD_API_KEY"):
+    with pytest.raises(FlashError, match="RUNPOD_API_KEY or"):
         load_flash_config(path)
 
 
@@ -124,8 +158,27 @@ def test_config_rejects_api_key_in_generated_host_environment(tmp_path):
     config["host"]["environment"]["RUNPOD_API_KEY"] = "must-not-be-persisted"
     path.write_text(yaml.safe_dump(config))
 
-    with pytest.raises(FlashError, match="RUNPOD_API_KEY"):
+    with pytest.raises(FlashError, match="RUNPOD_API_KEY or"):
         load_flash_config(path)
+
+
+def test_runpod_client_reads_default_profile_api_key_from_toml(tmp_path):
+    credentials_path = tmp_path / "config.toml"
+    credentials_path.write_text('[default]\napi_key = "config-secret"\n', encoding="utf-8")
+
+    assert load_runpod_api_key(credentials_path) == "config-secret"
+    assert RunpodClient(credentials_path=credentials_path, sdk=FakeRunpodSDK()).api_key == "config-secret"
+
+
+def test_environment_api_key_overrides_default_toml(tmp_path, monkeypatch):
+    credentials_path = tmp_path / "config.toml"
+    credentials_path.write_text('[default]\napi_key = "config-secret"\n', encoding="utf-8")
+    monkeypatch.setenv("RUNPOD_API_KEY", "environment-secret")
+
+    assert (
+        RunpodClient(credentials_path=credentials_path, sdk=FakeRunpodSDK()).api_key
+        == "environment-secret"
+    )
 
 
 def test_create_wait_persists_id_and_emits_valid_host_inventory(tmp_path):
@@ -199,13 +252,13 @@ def test_stop_sends_one_request_for_running_tracked_pod(tmp_path):
     assert client.stop_calls == 1
 
 
-def test_stop_rejects_empty_v2_response_and_marks_outcome_unknown(tmp_path):
+def test_stop_rejects_empty_sdk_response_and_marks_outcome_unknown(tmp_path):
     path = write_config(tmp_path)
     client = FakeClient(ready_pod())
     client.stop_pod = lambda pod_id: {}
     StateStore(tmp_path / ".flash").write_pod("pod-123", {"pod_id": "pod-123", "owned": True})
 
-    with pytest.raises(RunpodAPIError, match="invalid v2 Pod response"):
+    with pytest.raises(RunpodAPIError, match="invalid Pod response"):
         stop(path, "pod-123", client=client)
 
     state = json.loads((tmp_path / ".flash" / "pods" / "pod-123.json").read_text())
@@ -296,55 +349,55 @@ def test_host_resolution_requires_direct_ssh_details(tmp_path):
         resolve_host_config(config, {"id": "pod-123", "status": "RUNNING"})
 
 
-def test_stdlib_client_sends_bearer_header_without_logging_key():
-    seen = {}
+def test_sdk_client_sets_credential_and_uses_official_lifecycle_methods():
+    sdk = FakeRunpodSDK()
+    client = RunpodClient("top-secret", sdk=sdk)
 
-    class Response:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return None
-
-        def read(self):
-            return b'{"id":"pod-123"}'
-
-    def opener(request, timeout):
-        seen["authorization"] = request.headers["Authorization"]
-        seen["url"] = request.full_url
-        return Response()
-
-    client = RunpodClient("top-secret", opener=opener)
-    assert client.get_pod("pod-123") == {"id": "pod-123"}
-    assert seen == {
-        "authorization": "Bearer top-secret",
-        "url": "https://api.runpod.io/v2/pods/pod-123",
-    }
-
-
-def test_stdlib_client_uses_v2_action_contract_for_stop():
-    seen = {}
-
-    class Response:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return None
-
-        def read(self):
-            return b'{"id":"pod-123","status":"EXITED"}'
-
-    def opener(request, timeout):
-        seen["url"] = request.full_url
-        seen["method"] = request.method
-        seen["body"] = json.loads(request.data)
-        return Response()
-
-    client = RunpodClient("top-secret", opener=opener)
+    assert sdk.api_key == "top-secret"
+    assert client.create_pod({"name": "test-pod"})["id"] == "pod-123"
+    assert client.get_pod("pod-123")["id"] == "pod-123"
     assert client.stop_pod("pod-123")["status"] == "EXITED"
-    assert seen == {
-        "url": "https://api.runpod.io/v2/pods/pod-123/action",
-        "method": "POST",
-        "body": {"action": "stop"},
+    assert client.start_pod("pod-123", 1)["status"] == "RUNNING"
+    assert sdk.calls == [
+        ("create_pod", {"name": "test-pod"}),
+        ("get_pod", "pod-123"),
+        ("stop_pod", "pod-123"),
+        ("resume_pod", "pod-123", 1),
+    ]
+
+
+def test_sdk_client_converts_missing_pod_to_not_found():
+    client = RunpodClient("top-secret", sdk=FakeRunpodSDK())
+
+    with pytest.raises(RunpodAPIError, match="did not find") as caught:
+        client.get_pod("absent")
+
+    assert caught.value.status_code == 404
+
+
+def test_sdk_client_normalizes_legacy_runtime_port_for_host_inventory(tmp_path):
+    sdk = FakeRunpodSDK()
+    sdk.pod = {
+        "id": "pod-123",
+        "desiredStatus": "RUNNING",
+        "runtime": {
+            "ports": [
+                {
+                    "ip": "203.0.113.10",
+                    "privatePort": 22,
+                    "publicPort": 10341,
+                    "type": "tcp",
+                }
+            ]
+        },
     }
+
+    pod = RunpodClient("top-secret", sdk=sdk).get_pod("pod-123")
+    alias, host = resolve_host_config(load_flash_config(write_config(tmp_path)), pod)
+
+    assert pod["status"] == "RUNNING"
+    assert pod["ssh"]["direct"] == {"host": "203.0.113.10", "port": 10341}
+    assert alias == "test-runpod"
+    assert host.ssh_target == "203.0.113.10"
+    assert host.ssh_port == 10341
+    assert host.ssh_user == "root"
