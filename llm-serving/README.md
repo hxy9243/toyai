@@ -11,7 +11,7 @@ Isolated, reproducible benchmark and evaluation harness for parameter sweeps ove
   - Long prefill (8192 in / 128 out, 1 req/s, concurrency 8)
   - Near-limit prefill (15360 in / 256 out, 0.5 req/s, concurrency 2)
   - Decode heavy (256 in / 1024 out, 2 req/s, concurrency 16)
-- **Quality Evaluation**: Built-in lm-eval (e.g. GSM8K 5-shot) against the baseline serving configuration.
+- **Quality Evaluation**: Built-in lm-eval against the baseline serving configuration. By default it runs the full [LongBench v2](https://github.com/EleutherAI/lm-evaluation-harness/tree/main/lm_eval/tasks/longbench2) suite, GSM8K (5-shot), and the [lm-eval v1 SuperGLUE](https://github.com/EleutherAI/lm-evaluation-harness/tree/main/lm_eval/tasks/super_glue) suite.
 - **Fail-Safe Retries & Artifact Preservation**: 1 automatic retry on failure; immediate abort on second failure while retrieving partial results and generating structured reports.
 - **Reporting**: Full `manifest.json`, `summary.json`, `summary.csv`, and Markdown reports with delta comparisons vs baseline.
 
@@ -41,6 +41,16 @@ In host mode the runner starts `vllm serve` directly, writes a PID and `server.l
 Every experiment profile records an official model-card URL, the configuration URL used to read it, and its published `max_position_embeddings` under `model.model_card`. Treat this metadata as the source of truth for model capabilities when creating or revising a profile. The harness validates that the experiment's `server.max_model_len` does not exceed that published maximum.
 
 `server.max_model_len` is an experiment-specific vLLM serving cap, not a claim about the model's architectural context window. It may be smaller when a benchmark intentionally targets a shorter context or the available hardware cannot host the full KV cache.
+
+### Quality Evaluation Defaults
+
+Profiles without `quality.tasks` run the standard suite once against the baseline:
+
+- `longbench2` — the LongBench v2 task tag (503 long-context questions)
+- `gsm8k` — five-shot grade-school math
+- `super-glue-lm-eval-v1` — the full lm-eval v1 SuperGLUE tag
+
+These are the task names accepted by lm-eval; they correspond to the requested LongBench v2 and SuperGLUE benchmarks. Specify `quality: {tasks: []}` to skip quality evaluation, or provide a `quality.tasks` list to replace the defaults. LongBench v2 includes contexts from 8K up to 2M words, so configure an appropriate `server.max_model_len` and model for the portion of that benchmark you intend to run.
 
 ### 2. Validate & Plan
 

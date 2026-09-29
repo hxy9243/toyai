@@ -29,8 +29,5 @@ sweep:
   chunked_prefill: [true, false]
   repetitions: 1
 
-quality:
-  tasks:
-    - name: gsm8k
-      num_fewshot: 5
-      limit: 250
+# Omitting quality.tasks uses the standard lm-eval suite: LongBench v2, GSM8K,
+# and SuperGLUE. Add `quality: {tasks: []}` to skip quality evaluation.

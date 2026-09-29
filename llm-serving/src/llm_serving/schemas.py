@@ -148,10 +148,25 @@ class QualityTask(BaseModel):
         return v
 
 
+def default_quality_tasks() -> List[QualityTask]:
+    """Return a fresh copy of the standard lm-evaluation-harness suite."""
+    return [
+        QualityTask(name="longbench2"),
+        QualityTask(name="gsm8k", num_fewshot=5),
+        QualityTask(name="super-glue-lm-eval-v1"),
+    ]
+
+
 class QualityConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    tasks: List[QualityTask] = Field(default_factory=list, description="Quality benchmark tasks to run")
+    tasks: List[QualityTask] = Field(
+        default_factory=default_quality_tasks,
+        description=(
+            "Quality benchmark tasks to run. Defaults to LongBench v2, GSM8K "
+            "(5-shot), and the lm-eval v1 SuperGLUE suite."
+        ),
+    )
 
 
 class ExperimentProfile(BaseModel):

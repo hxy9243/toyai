@@ -10,6 +10,7 @@ from llm_serving.schemas import (
     ExperimentProfile,
     HostConfig,
     HostInventory,
+    QualityConfig,
     validate_profile_against_host,
 )
 
@@ -78,6 +79,16 @@ def test_valid_profile_parsing(valid_profile_dict):
     assert profile.model.id == "Qwen/Qwen3.5-27B"
     assert profile.model.model_card.max_position_embeddings == 32768
     assert profile.parallelism.tensor_parallel == 2
+
+
+def test_default_quality_suite_uses_canonical_lm_eval_task_names():
+    tasks = QualityConfig().tasks
+
+    assert [(task.name, task.num_fewshot, task.limit) for task in tasks] == [
+        ("longbench2", None, None),
+        ("gsm8k", 5, None),
+        ("super-glue-lm-eval-v1", None, None),
+    ]
 
 
 def test_rejects_server_limit_smaller_than_a_benchmark_request(valid_profile_dict):
