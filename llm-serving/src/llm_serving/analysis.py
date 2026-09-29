@@ -161,8 +161,8 @@ def _percentile(benchmark: Mapping[str, Any], family: str, percentile: str = "p5
     return values.get(percentile) if isinstance(values, Mapping) else None
 
 
-def performance_rows(runs: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
-    """Flatten performance cases while keeping every absent metric as ``None``."""
+def performance_rows(runs: Iterable[Mapping[str, Any]], *, include_profiled: bool = False) -> list[dict[str, Any]]:
+    """Flatten measurements; omit profiled rows by default to avoid timing bias."""
 
     rows: list[dict[str, Any]] = []
     for run in runs:
@@ -170,6 +170,8 @@ def performance_rows(runs: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
         for case in summary.get("cases") or []:
             config = f"CG {'on' if case.get('cuda_graphs') else 'off'} / CP {'on' if case.get('chunked_prefill') else 'off'}"
             for benchmark in case.get("benchmarks") or []:
+                if benchmark.get("profiled") and not include_profiled:
+                    continue
                 deltas = benchmark.get("deltas_vs_baseline") or {}
                 rows.append(
                     {
@@ -183,6 +185,7 @@ def performance_rows(runs: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
                         "repetition": case.get("repetition"),
                         "workload": benchmark.get("workload_name") or benchmark.get("workload_slug"),
                         "workload_slug": benchmark.get("workload_slug"),
+                        "profiled": bool(benchmark.get("profiled")),
                         "output_throughput_tok_per_s": benchmark.get("output_throughput_tok_per_s"),
                         "request_throughput_req_per_s": benchmark.get("request_throughput_req_per_s"),
                         "ttft_p50_ms": _percentile(benchmark, "ttft"),

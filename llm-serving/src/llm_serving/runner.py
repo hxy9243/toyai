@@ -58,6 +58,7 @@ class ExperimentRunner:
         self.local_run_dir = local_output_root / profile.name / self.run_id
         self.remote_staging_dir = f"{host.remote_root}/staging/{self.run_id}"
         self.remote_artifacts_dir = f"{host.remote_root}/artifacts/{self.run_id}"
+        self._attempt = 0
         self.image_tag = "llm-serving-vllm:v0.28.0"
 
     def run(self) -> Tuple[int, Path]:
@@ -407,6 +408,7 @@ class ExperimentRunner:
         last_error: Optional[str] = None
 
         for attempt in range(max_attempts):
+            self._attempt = attempt
             retries = attempt
             logger.info(f"Executing {case.case_id} (attempt {attempt + 1}/{max_attempts})...")
             success, error, benchmarks = self._run_single_case(case)
@@ -418,7 +420,7 @@ class ExperimentRunner:
                     "chunked_prefill": case.chunked_prefill,
                     "repetition": case.repetition,
                     "is_baseline": case.is_baseline,
-                    "vllm_args": case.vllm_args,
+                    "vllm_args": self._performance_serve_args(case),
                     "status": "SUCCESS",
                     "retries": retries,
                     "error": None,
@@ -439,7 +441,7 @@ class ExperimentRunner:
             "chunked_prefill": case.chunked_prefill,
             "repetition": case.repetition,
             "is_baseline": case.is_baseline,
-            "vllm_args": case.vllm_args,
+            "vllm_args": self._performance_serve_args(case),
             "status": "FAILED",
             "retries": max_attempts - 1,
             "error": last_error,
@@ -477,10 +479,41 @@ class ExperimentRunner:
         )
         return " && ".join(commands)
 
-    def _start_host_server(self, remote_dir: str, case: ServingCase) -> None:
+    def _profile_workload(self, workload: BenchmarkWorkload) -> bool:
+        config = self.profile.profiling
+        return config.enabled and workload.slug == config.workload
+
+    def _performance_serve_args(self, case: ServingCase) -> List[str]:
+        args = list(case.vllm_args)
+        config = self.profile.profiling
+        if config.enabled:
+            root = self._case_directory(case) if self.host.execution_mode == "host" else "/workspace/output"
+            trace_dir = f"{root}/profiling/attempt-{self._attempt}/{config.workload}"
+            args.extend(["--profiler-config", json.dumps(config.server_config(trace_dir))])
+        return args
+
+    def _verify_profile_capture(self, case: ServingCase, workload: BenchmarkWorkload) -> None:
+        if not self._profile_workload(workload):
+            return
+        root = self._case_directory(case) if self.host.execution_mode == "host" else "/workspace/output"
+        trace_dir = f"{root}/profiling/attempt-{self._attempt}/{workload.slug}"
+        # The benchmark may exit successfully even if /start_profile failed.
+        # Verify the server actually flushed at least one nonempty trace.
+        script = (
+            "from pathlib import Path; "
+            f"p=Path({trace_dir!r}); "
+            "files=[f for f in p.rglob('*.pt.trace.json*') if f.is_file() and f.stat().st_size]; "
+            "assert files, 'No profiler trace saved; check server profiling support and delay_iterations'"
+        )
+        prefix = shlex.quote(self.host.python_executable) if self.host.execution_mode == "host" else f"docker exec {shlex.quote(self._container_name(case))} python3"
+        result = self.transport.run_cmd(f"{prefix} -c {shlex.quote(script)}")
+        if not result.ok:
+            raise RuntimeError(f"Profiling capture missing: {result.stderr or result.stdout}")
+
+    def _start_host_server(self, remote_dir: str, case: ServingCase, *, capture: bool = False) -> None:
         log_file = f"{remote_dir}/server.log"
         pid_file = f"{remote_dir}/server.pid"
-        serve_args = " ".join(shlex.quote(arg) for arg in case.vllm_args)
+        serve_args = " ".join(shlex.quote(arg) for arg in (self._performance_serve_args(case) if capture else case.vllm_args))
         command = (
             f"cd {shlex.quote(remote_dir)} && "
             f"if {self._host_environment_setup()}; then "
@@ -506,7 +539,7 @@ class ExperimentRunner:
 
         if self.host.execution_mode == "host":
             try:
-                self._start_host_server(remote_case_dir, case)
+                self._start_host_server(remote_case_dir, case, capture=True)
             except RuntimeError as exc:
                 return False, str(exc), []
             health_ok, health_err = self._wait_for_health(remote_case_dir)
@@ -530,7 +563,7 @@ class ExperimentRunner:
             docker_cmd_parts.extend(["--env-file", self.host.secret_env_file])
 
         docker_cmd_parts.append(self.image_tag)
-        docker_cmd_parts.append("vllm serve " + " ".join(shlex.quote(a) for a in case.vllm_args))
+        docker_cmd_parts.append("vllm serve " + " ".join(shlex.quote(a) for a in self._performance_serve_args(case)))
 
         full_docker_cmd = " ".join(docker_cmd_parts)
         run_res = self.transport.run_cmd(full_docker_cmd)
@@ -555,15 +588,19 @@ class ExperimentRunner:
                     host="127.0.0.1",
                     port=8000,
                     result_filepath=bench_res_json_file,
+                    profile=self._profile_workload(workload),
                 )
                 exec_cmd = f"docker exec {shlex.quote(cname)} {' '.join(shlex.quote(a) for a in bench_cmd)}"
-                res = self.transport.run_cmd(exec_cmd, timeout=600)
+                res = self.transport.run_cmd(exec_cmd, timeout=self.profile.profiling.benchmark_timeout_seconds if self._profile_workload(workload) else 600)
                 if not res.ok:
                     raise RuntimeError(f"Benchmark {workload.name} failed: {res.stderr or res.stdout}")
+
+                self._verify_profile_capture(case, workload)
 
                 # Parse JSON output from container or stdout
                 raw_json = self._load_json_output(remote_case_dir, f"benchmark-{workload.slug}.json", res.stdout)
                 normalized = normalize_benchmark_output(workload, raw_json)
+                normalized.profiled = self._profile_workload(workload)
                 benchmarks.append(normalized)
 
         except Exception as bench_err:
@@ -595,17 +632,21 @@ class ExperimentRunner:
                     host="127.0.0.1",
                     port=8000,
                     result_filepath=bench_res_json_file,
+                    profile=self._profile_workload(workload),
                 )
                 host_bench_cmd = f"{self._host_vllm_cli()} {' '.join(shlex.quote(arg) for arg in bench_cmd[1:])}"
                 result = self.transport.run_cmd(
-                    host_bench_cmd, timeout=600
+                    host_bench_cmd, timeout=self.profile.profiling.benchmark_timeout_seconds if self._profile_workload(workload) else 600
                 )
                 if not result.ok:
                     raise RuntimeError(f"Benchmark {workload.name} failed: {result.stderr or result.stdout}")
                 raw_json = self._load_json_output(
                     remote_case_dir, f"benchmark-{workload.slug}.json", result.stdout
                 )
-                benchmarks.append(normalize_benchmark_output(workload, raw_json))
+                self._verify_profile_capture(case, workload)
+                normalized = normalize_benchmark_output(workload, raw_json)
+                normalized.profiled = self._profile_workload(workload)
+                benchmarks.append(normalized)
         except Exception as bench_err:
             return False, str(bench_err), []
         finally:

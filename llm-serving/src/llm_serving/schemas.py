@@ -102,7 +102,7 @@ class ServerConfig(BaseModel):
     def validate_extra_args(cls, args: List[str]) -> List[str]:
         for arg in args:
             flag = arg.split("=")[0].split()[0].strip()
-            if flag in FORBIDDEN_SERVER_EXTRA_ARGS:
+            if flag in FORBIDDEN_SERVER_EXTRA_ARGS or flag.startswith("--profiler-config"):
                 raise ValueError(
                     f"Forbidden extra_arg '{arg}'. Harness-managed arguments ({flag}) cannot be overridden."
                 )
@@ -169,6 +169,41 @@ class QualityConfig(BaseModel):
     )
 
 
+class ProfilingConfig(BaseModel):
+    """A bounded worker trace for one workload per serving case (vLLM 0.28)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    workload: str = "decode-heavy"
+    delay_iterations: int = Field(default=20, ge=0)
+    max_iterations: int = Field(default=10, ge=1)
+    with_stack: bool = False
+    record_shapes: bool = False
+    profile_memory: bool = False
+    benchmark_timeout_seconds: int = Field(default=1800, ge=1)
+
+    @field_validator("workload")
+    @classmethod
+    def validate_workload(cls, value: str) -> str:
+        if value not in {workload.slug for workload in WORKLOADS}:
+            raise ValueError("profiling.workload must name an existing benchmark workload")
+        return value
+
+    def server_config(self, trace_dir: str) -> dict:
+        return {
+            "profiler": "torch",
+            "torch_profiler_dir": trace_dir,
+            "delay_iterations": self.delay_iterations,
+            "max_iterations": self.max_iterations,
+            "ignore_frontend": True,
+            "torch_profiler_with_stack": self.with_stack,
+            "torch_profiler_record_shapes": self.record_shapes,
+            "torch_profiler_with_memory": self.profile_memory,
+            "torch_profiler_use_gzip": True,
+        }
+
+
 class ExperimentProfile(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -179,6 +214,7 @@ class ExperimentProfile(BaseModel):
     server: ServerConfig = Field(default_factory=ServerConfig)
     sweep: SweepConfig = Field(default_factory=SweepConfig)
     quality: QualityConfig = Field(default_factory=QualityConfig)
+    profiling: ProfilingConfig = Field(default_factory=ProfilingConfig)
 
     @field_validator("schema_version")
     @classmethod

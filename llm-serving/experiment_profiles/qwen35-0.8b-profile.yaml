@@ -1,0 +1,40 @@
+# Diagnostic companion to qwen35-0.8b-smoke; see docs/profiling.md.
+schema_version: 1
+name: qwen35-0.8b-profile
+model:
+  id: Qwen/Qwen3.5-0.8B
+  revision: main
+  variant: BF16
+  dtype: auto
+  quantization: null
+  model_card:
+    url: https://huggingface.co/Qwen/Qwen3.5-0.8B
+    config_url: https://huggingface.co/Qwen/Qwen3.5-0.8B/blob/main/config.json
+    max_position_embeddings: 262144
+parallelism:
+  tensor_parallel: 1
+  data_parallel: 1
+server:
+  max_model_len: 262144
+  gpu_memory_utilization: 0.8
+  trust_remote_code: false
+  startup_timeout_seconds: 600
+  extra_args: []
+sweep:
+  cuda_graphs:
+  - true
+  - false
+  chunked_prefill:
+  - true
+  repetitions: 1
+quality:
+  tasks: []
+profiling:
+  enabled: true
+  workload: decode-heavy
+  delay_iterations: 20
+  max_iterations: 10
+  with_stack: false
+  record_shapes: false
+  profile_memory: false
+  benchmark_timeout_seconds: 1800

@@ -66,6 +66,7 @@ def build_bench_serve_command(
     host: str = "127.0.0.1",
     port: int = 8000,
     result_filepath: Optional[str] = None,
+    profile: bool = False,
 ) -> List[str]:
     """Generates the deterministic vllm bench serve command for a workload."""
     cmd = [
@@ -89,6 +90,8 @@ def build_bench_serve_command(
     ]
     if result_filepath:
         cmd.extend(["--save-result", "--result-filename", result_filepath])
+    if profile:
+        cmd.append("--profile")
     return cmd
 
 
@@ -115,6 +118,7 @@ class NormalizedBenchmarkResult:
     itl: NormalizedLatencyMetrics
     e2e: NormalizedLatencyMetrics
     raw_data: Dict[str, Any]
+    profiled: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)

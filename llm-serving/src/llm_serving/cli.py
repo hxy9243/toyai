@@ -159,6 +159,15 @@ def plan_cmd(profile: str, host_arg: str, inventory_path: Optional[str]):
 
     console.print(table)
     console.print(f"\nTotal sweep cases to execute: [bold]{len(cases)}[/bold]")
+    if prof.profiling.enabled:
+        console.print(
+            f"[yellow]Diagnostic profiling: {prof.profiling.workload}; "
+            f"skip {prof.profiling.delay_iterations} engine iterations, "
+            f"capture up to {prof.profiling.max_iterations}. "
+            "Worker traces are saved under each case's profiling/attempt-N directory. "
+            "The runner adds --profiler-config with that runtime path; "
+            "profiled timings are excluded from default notebook charts.[/yellow]"
+        )
     if prof.quality.tasks:
         console.print(f"Quality evaluations configured: [bold]{[t.name for t in prof.quality.tasks]}[/bold] (runs once on baseline case)")
 

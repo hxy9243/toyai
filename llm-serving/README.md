@@ -108,3 +108,7 @@ create it, export its host configuration, and stop it when finished. Stopping
 releases compute but may retain billable storage; this driver does not delete Pods.
 Local provider configuration and `.flash/` state are excluded from Git and remote
 experiment uploads.
+
+## Profiling
+
+See [bounded worker profiling](docs/profiling.md) for capture windows, the diagnostic example profile, and `notebooks/profiling.ipynb` for kernel summaries and Perfetto traces.

@@ -42,3 +42,7 @@ For a clean-kernel verification without JupyterLab, execute the notebook into a 
 ```bash
 uv run --extra analysis jupyter execute notebooks/qwen35-0.8b-smoke.ipynb
 ```
+
+## Profiling
+
+See [bounded worker profiling](profiling.md) for capture windows, the diagnostic example profile, and `notebooks/profiling.ipynb` for kernel summaries and Perfetto traces.

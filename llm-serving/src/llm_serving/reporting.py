@@ -65,6 +65,7 @@ def generate_summary_data(
         "gpu_info": manifest.get("gpu_info", {}),
         "cases": [],
         "quality": quality_data or [],
+        "profiling": profile.profiling.model_dump(),
     }
 
     # Identify baseline case results (cuda_graphs=True, chunked_prefill=True, rep=0)
@@ -127,6 +128,8 @@ def generate_summary_data(
                     "e2e_p50_ms_pct": calculate_percentage_delta(e2e_p50, base_e2e_p50, higher_is_better=False),
                 },
             }
+            if b.get("profiled") or base_b.get("profiled"):
+                bench_summary["deltas_vs_baseline"] = {key: None for key in bench_summary["deltas_vs_baseline"]}
             case_summary["benchmarks"].append(bench_summary)
 
         summary["cases"].append(case_summary)
@@ -168,6 +171,7 @@ def export_summary_csv(summary_data: Dict[str, Any]) -> str:
         "e2e_p50_ms",
         "e2e_p90_ms",
         "e2e_p99_ms",
+        "profiled",
     ]
     writer.writerow(headers)
 
@@ -214,6 +218,7 @@ def export_summary_csv(summary_data: Dict[str, Any]) -> str:
                 e2e.get("p50_ms"),
                 e2e.get("p90_ms"),
                 e2e.get("p99_ms"),
+                b.get("profiled", False),
             ]
             writer.writerow(row)
 
@@ -258,6 +263,21 @@ def render_markdown_report(summary_data: Dict[str, Any], manifest: Dict[str, Any
     lines.append(f"| **Duration** | {summary_data.get('duration_seconds', 0):.1f}s |")
     lines.append("")
 
+    if summary_data.get("profiling", {}).get("enabled"):
+        config = summary_data["profiling"]
+        lines.extend([
+            "## Profiling (diagnostic)", "",
+            f"Workload: `{config['workload']}`; skip {config['delay_iterations']} engine iterations, "
+            f"capture up to {config['max_iterations']}. Profiled latencies/throughput include tracing overhead; "
+            "their baseline deltas are omitted. Compare performance using an unprofiled run.", "",
+            "Open the worker `.pt.trace.json.gz` files in [Perfetto](https://ui.perfetto.dev/). "
+            "Trace presence verifies export, not that the requested window completed.", "",
+        ])
+        for case in summary_data.get("cases", []):
+            case_id = case["case_id"]
+            lines.append(f"- `{case_id}`: [trace artifacts](cases/{case_id}/profiling/)")
+        lines.append("")
+
     # Performance Benchmarks by Workload
     lines.append("## Performance Benchmarks")
     lines.append("")
@@ -288,6 +308,8 @@ def render_markdown_report(summary_data: Dict[str, Any], manifest: Dict[str, Any
             # Find matching benchmark
             bench = next((b for b in case.get("benchmarks", []) if b.get("workload_slug") == slug), None)
             if bench:
+                if bench.get("profiled"):
+                    case_status += " (profiled; diagnostic)"
                 deltas = bench.get("deltas_vs_baseline", {})
                 out_tp = _fmt_float(bench.get("output_throughput_tok_per_s"))
                 out_tp_delta = f"{deltas.get('output_throughput_tok_per_s_pct'):+.1f}%" if deltas.get("output_throughput_tok_per_s_pct") is not None else "-"

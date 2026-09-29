@@ -435,3 +435,51 @@ def test_interrupted_run_cleanup(tmp_path, profile_fixture, host_fixture):
         manifest = json.load(f)
     assert manifest["status"] == "FAILED"
     assert "SSH sync connection dropped" in manifest["error_message"]
+
+
+@pytest.mark.parametrize('mode', ['docker', 'host'])
+def test_profiled_window_per_case(tmp_path, profile_fixture, host_fixture, mode):
+    from llm_serving.schemas import ProfilingConfig
+    from llm_serving.analysis import load_run, performance_rows
+
+    profile = profile_fixture.model_copy(update={
+        'profiling': ProfilingConfig(enabled=True, delay_iterations=12, max_iterations=7),
+    })
+    host = host_fixture.model_copy(update={'execution_mode': mode})
+    transport = MockTransport(host)
+    runner = ExperimentRunner(profile, host, transport, tmp_path, tmp_path / 'output')
+    code, run_dir = runner.run()
+    assert code == 0
+    capture_commands = [c for c in transport.command_history if '--profile' in c and 'bench serve' in c]
+    assert len(capture_commands) == 4
+    assert all('--random-output-len 1024' in c for c in capture_commands)
+    server_commands = [c for c in transport.command_history if '--profiler-config' in c]
+    assert len(server_commands) == 4  # Quality server stays unprofiled.
+    assert all('"ignore_frontend": true' in c and '"max_iterations": 7' in c for c in server_commands)
+    expected_root = '/workspace/output' if mode == 'docker' else runner.remote_staging_dir + '/cases/'
+    assert all(expected_root in c for c in server_commands)
+    run = load_run(run_dir)
+    assert len(performance_rows([run])) == 12
+    assert len(performance_rows([run], include_profiled=True)) == 16
+    profiled = [b for c in run['summary']['cases'] for b in c['benchmarks'] if b['profiled']]
+    assert all(all(v is None for v in b['deltas_vs_baseline'].values()) for b in profiled)
+    assert 'diagnostic' in (run_dir / 'report.md').read_text()
+    assert 'profiled' in (run_dir / 'summary.csv').read_text().splitlines()[0]
+
+
+@pytest.mark.parametrize('mode', ['docker', 'host'])
+def test_missing_trace_fails_and_retries_in_distinct_directory(tmp_path, profile_fixture, host_fixture, mode):
+    from llm_serving.schemas import ProfilingConfig
+
+    profile = profile_fixture.model_copy(update={'profiling': ProfilingConfig(enabled=True)})
+    host = host_fixture.model_copy(update={'execution_mode': mode})
+    transport = MockTransport(host)
+    transport.set_response('assert files', CommandResult(1, '', 'No profiler trace saved'))
+    runner = ExperimentRunner(profile, host, transport, tmp_path, tmp_path / 'output')
+    code, run_dir = runner.run()
+    assert code != 0
+    commands = [c for c in transport.command_history if '--profiler-config' in c]
+    assert len(commands) == 2
+    assert 'attempt-0' in commands[0]
+    assert 'attempt-1' in commands[1]
+    assert 'Profiling capture missing' in (run_dir / 'summary.json').read_text()
