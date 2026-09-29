@@ -34,10 +34,8 @@ sweep:
 
 quality:
   tasks:
-    - name: longbench2
-      limit: 20
     - name: gsm8k
       num_fewshot: 5
-      limit: 20
+      limit: 10
     - name: super-glue-lm-eval-v1
-      limit: 20
+      limit: 10
