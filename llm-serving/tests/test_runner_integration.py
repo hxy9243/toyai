@@ -125,10 +125,43 @@ def test_host_runtime_runs_without_docker_and_validates_libraries(tmp_path, prof
     assert any("/vllm\" serve" in command for command in transport.command_history)
     assert any("/vllm\" bench serve" in command for command in transport.command_history)
     assert any("VLLM_USE_FLASHINFER_SAMPLER=0" in command for command in transport.command_history)
-    assert any("python3 -m lm_eval --model" in command for command in transport.command_history)
+    assert any(".llm-serving-venv/bin/python -m lm_eval --model" in command for command in transport.command_history)
+    assert any("HF_HOME=/cache/hf" in command and "-m lm_eval" in command for command in transport.command_history)
+    assert any("max_length=16384,truncate=true" in command for command in transport.command_history)
     with open(run_dir / "manifest.json") as f:
         manifest = json.load(f)
     assert manifest["docker_image_digest"] == "host-vllm:OK"
+
+
+def test_failed_host_quality_task_fails_the_run(tmp_path, profile_fixture, host_fixture):
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    host = host_fixture.model_copy(update={"execution_mode": "host"})
+    transport = MockTransport(host)
+    original_run_cmd = transport.run_cmd
+
+    def fail_lm_eval(cmd: str, timeout=None):
+        if " -m lm_eval " in cmd:
+            return CommandResult(exit_code=1, stdout="", stderr="LongBench task timed out")
+        return original_run_cmd(cmd, timeout)
+
+    transport.run_cmd = fail_lm_eval
+    runner = ExperimentRunner(
+        profile=profile_fixture,
+        host=host,
+        transport=transport,
+        local_project_dir=project_dir,
+        local_output_root=output_dir,
+    )
+
+    exit_code, run_dir = runner.run()
+
+    assert exit_code == 1
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert "lm-eval task 'gsm8k' failed: LongBench task timed out" in manifest["error_message"]
 
 
 def test_host_runtime_installs_missing_libraries(tmp_path, profile_fixture, host_fixture):
@@ -161,8 +194,55 @@ def test_host_runtime_installs_missing_libraries(tmp_path, profile_fixture, host
     exit_code, run_dir = runner.run()
 
     assert exit_code == 0
-    assert any("python3 -m pip install --disable-pip-version-check 'lm-eval[api]'" in command for command in transport.command_history)
+    assert any(".llm-serving-venv/bin/python -m pip install --disable-pip-version-check 'lm-eval[api]'" in command for command in transport.command_history)
     assert not any(command.startswith("docker ") for command in transport.command_history)
+
+
+def test_host_runtime_bootstraps_project_virtualenv_for_externally_managed_python(
+    tmp_path, profile_fixture, host_fixture
+):
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    host = host_fixture.model_copy(update={"execution_mode": "host"})
+    transport = MockTransport(host)
+    original_run_cmd = transport.run_cmd
+    state = {"venv_created": False, "vllm_probe": 0}
+
+    def externally_managed_python(cmd: str, timeout=None):
+        if "sys.prefix != sys.base_prefix else 1" in cmd:
+            return CommandResult(exit_code=1, stdout="", stderr="system Python")
+        if "-m venv" in cmd:
+            state["venv_created"] = True
+            return CommandResult(exit_code=0, stdout="", stderr="")
+        if "assert sys.prefix != sys.base_prefix" in cmd:
+            return CommandResult(exit_code=0, stdout="", stderr="")
+        if "find_spec" in cmd and "vllm" in cmd:
+            state["vllm_probe"] += 1
+            if state["vllm_probe"] == 1:
+                return CommandResult(exit_code=1, stdout="", stderr="ModuleNotFoundError")
+        return original_run_cmd(cmd, timeout)
+
+    transport.run_cmd = externally_managed_python
+    runner = ExperimentRunner(
+        profile=profile_fixture,
+        host=host,
+        transport=transport,
+        local_project_dir=project_dir,
+        local_output_root=output_dir,
+    )
+
+    exit_code, _ = runner.run()
+
+    assert exit_code == 0
+    assert state["venv_created"] is True
+    assert runner.host.python_executable == "/staging/root/.llm-serving-venv/bin/python"
+    assert any(".llm-serving-venv/bin/python -m pip install" in command for command in transport.command_history)
+    assert any("ninja" in command for command in transport.command_history)
+    assert not any("--break-system-packages" in command for command in transport.command_history)
+    assert any("/staging/root/artifacts/" in command for command in transport.command_history)
 
 
 def test_quality_results_are_loaded_from_lm_eval_timestamped_output(tmp_path, profile_fixture, host_fixture):

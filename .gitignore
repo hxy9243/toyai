@@ -248,5 +248,7 @@ pyrightconfig.json
 # LLM Serving Harness
 llm-serving/output/
 llm-serving/hosts.local.yaml
+llm-serving/runpod.local.yaml
+llm-serving/.flash/
 llm-serving/report.md
 report.md

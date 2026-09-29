@@ -56,6 +56,8 @@ def test_build_bench_serve_command():
     assert "--model" in cmd and "Qwen/Qwen3.5-27B" in cmd
     assert "--random-input-len" in cmd and "256" in cmd
     assert "--random-output-len" in cmd and "128" in cmd
+    assert "--metric-percentiles" in cmd and "50,90,95,99" in cmd
+    assert "--percentile-metrics" in cmd and "ttft,itl,tpot,e2el" in cmd
     assert "--save-result" in cmd
     assert "--result-filename" in cmd
 
@@ -68,6 +70,7 @@ def test_normalize_benchmark_output():
         "total_duration": 32.2,
         "ttft_p50": 14.5,
         "ttft_p90": 21.0,
+        "ttft_p95": 26.7,
         "ttft_p99": 32.5,
         "ttft_mean": 16.2,
         "tpot_p50": 8.0,
@@ -76,6 +79,7 @@ def test_normalize_benchmark_output():
         "tpot_mean": 8.4,
         "itl_p50": 7.8,
         "itl_p90": 9.5,
+        "itl_p95": 11.1,
         "itl_p99": 13.0,
         "itl_mean": 8.1,
         "e2e_latency_p50": 1020.0,
@@ -88,7 +92,9 @@ def test_normalize_benchmark_output():
     assert res.output_throughput_tok_per_s == 1017.6
     assert res.ttft.p50_ms == 14.5
     assert res.ttft.p90_ms == 21.0
+    assert res.ttft.p95_ms == 26.7
     assert res.ttft.p99_ms == 32.5
     assert res.tpot.p50_ms == 8.0
     assert res.itl.p50_ms == 7.8
+    assert res.itl.p95_ms == 11.1
     assert res.e2e.p50_ms == 1020.0

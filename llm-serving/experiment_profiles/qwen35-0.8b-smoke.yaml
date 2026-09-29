@@ -17,9 +17,9 @@ parallelism:
   data_parallel: 1
 
 server:
-  # This is the smoke experiment's serving cap, not the model's published
-  # context window (262144; recorded above from the official config).
-  max_model_len: 16384
+  # Serve the model's published 262144-token context window, recorded above
+  # from the official configuration.
+  max_model_len: 262144
   gpu_memory_utilization: 0.80
   trust_remote_code: false
   startup_timeout_seconds: 600
@@ -36,4 +36,6 @@ quality:
   tasks:
     - name: gsm8k
       num_fewshot: 5
-      limit: 20
+      limit: 10
+    - name: super-glue-lm-eval-v1
+      limit: 10

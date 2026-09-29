@@ -81,7 +81,10 @@ class SSHTransport:
             raise RuntimeError(f"Failed to create remote directory '{remote_dir}': {mkdir_res.stderr}")
 
         exclude_set = set(excludes or [])
-        exclude_set.update([".venv", "__pycache__", ".git", ".pytest_cache", "output", "*.pyc"])
+        exclude_set.update([
+            ".venv", "__pycache__", ".git", ".pytest_cache", "output", "*.pyc",
+            ".flash", "runpod.local.yaml", "hosts.local.yaml", ".env",
+        ])
 
         def tar_filter(tarinfo: tarfile.TarInfo) -> Optional[tarfile.TarInfo]:
             for exc in exclude_set:
@@ -169,9 +172,9 @@ class MockTransport:
             sample_json = (
                 '{"request_throughput": 7.85, "output_throughput": 1005.2, "completed": 256, '
                 '"total_duration": 32.6, '
-                '"ttft_p50": 15.2, "ttft_p90": 22.4, "ttft_p99": 35.1, "ttft_mean": 17.0, '
+                '"ttft_p50": 15.2, "ttft_p90": 22.4, "ttft_p95": 27.6, "ttft_p99": 35.1, "ttft_mean": 17.0, '
                 '"tpot_p50": 8.1, "tpot_p90": 10.5, "tpot_p99": 14.2, "tpot_mean": 8.5, '
-                '"itl_p50": 7.9, "itl_p90": 10.1, "itl_p99": 13.9, "itl_mean": 8.2, '
+                '"itl_p50": 7.9, "itl_p90": 10.1, "itl_p95": 11.8, "itl_p99": 13.9, "itl_mean": 8.2, '
                 '"e2e_latency_p50": 1050.0, "e2e_latency_p90": 1200.0, "e2e_latency_p99": 1450.0, "e2e_latency_mean": 1080.0}'
             )
             return CommandResult(exit_code=0, stdout=sample_json, stderr="")

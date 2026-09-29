@@ -25,9 +25,17 @@ def build_lm_eval_command(
     task: QualityTask,
     base_url: str = "http://localhost:8000/v1/completions",
     output_dir: Optional[str] = None,
+    max_length: Optional[int] = None,
 ) -> List[str]:
     """Builds lm_eval command targeting vLLM OpenAI-compatible local-completions endpoint."""
-    model_args = f"model={model_id},base_url={base_url},num_concurrent=8"
+    model_args_parts = [
+        f"model={model_id}",
+        f"base_url={base_url}",
+        "num_concurrent=8",
+    ]
+    if max_length is not None:
+        model_args_parts.extend([f"max_length={max_length}", "truncate=true"])
+    model_args = ",".join(model_args_parts)
     cmd = [
         "lm_eval",
         "--model", "local-completions",
@@ -50,6 +58,13 @@ def parse_lm_eval_results(raw_json: Dict[str, Any]) -> List[QualityMetricResult]
     results: List[QualityMetricResult] = []
     task_results = raw_json.get("results", {})
 
+    def stderr_key(metric_key: str) -> str:
+        """lm-eval inserts ``_stderr`` before a comma-qualified metric suffix."""
+        if "," in metric_key:
+            metric_name, metric_suffix = metric_key.split(",", 1)
+            return f"{metric_name}_stderr,{metric_suffix}"
+        return f"{metric_key}_stderr"
+
     for task_name, metrics in task_results.items():
         if not isinstance(metrics, dict):
             continue
@@ -68,6 +83,10 @@ def parse_lm_eval_results(raw_json: Dict[str, Any]) -> List[QualityMetricResult]
             "acc_norm",
             "acc",
             "exact_match",
+            "f1,none",
+            "em,none",
+            "f1",
+            "em",
         ]
 
         for k in candidate_keys:
@@ -77,23 +96,29 @@ def parse_lm_eval_results(raw_json: Dict[str, Any]) -> List[QualityMetricResult]
                     primary_score = float(metrics[k])
                 except (ValueError, TypeError):
                     primary_score = 0.0
-                stderr_key = f"{k}_stderr"
-                if stderr_key in metrics:
+                metric_stderr_key = stderr_key(k)
+                if metric_stderr_key in metrics:
                     try:
-                        primary_stderr = float(metrics[stderr_key])
+                        primary_stderr = float(metrics[metric_stderr_key])
                     except (ValueError, TypeError):
                         pass
                 break
 
         if primary_key is None:
-            # Fall back to first numeric value
+            # Fall back to the first score-like numeric value.  lm-eval also
+            # records metadata such as sample_len, which must never be
+            # reported as an evaluation score.
             for k, v in metrics.items():
-                if isinstance(v, (int, float)) and not k.endswith("_stderr"):
+                if (
+                    isinstance(v, (int, float))
+                    and not k.endswith("_stderr")
+                    and k not in {"sample_len", "version", "n-shot"}
+                ):
                     primary_key = k
                     primary_score = float(v)
-                    stderr_k = f"{k}_stderr"
-                    if stderr_k in metrics:
-                        primary_stderr = float(metrics[stderr_k])
+                    metric_stderr_key = stderr_key(k)
+                    if metric_stderr_key in metrics:
+                        primary_stderr = float(metrics[metric_stderr_key])
                     break
 
         if primary_key is None:

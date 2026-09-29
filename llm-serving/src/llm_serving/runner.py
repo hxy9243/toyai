@@ -34,6 +34,10 @@ from llm_serving.workloads import (
 
 logger = logging.getLogger("llm_serving")
 
+# LongBench v2 expands into multiple long-context subtasks. On modest single-GPU
+# hosts, its real evaluation can exceed one hour even for a smoke-limited run.
+QUALITY_EVALUATION_TIMEOUT_SECONDS = 4 * 60 * 60
+
 
 class ExperimentRunner:
     def __init__(
@@ -53,6 +57,7 @@ class ExperimentRunner:
         self.run_id = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         self.local_run_dir = local_output_root / profile.name / self.run_id
         self.remote_staging_dir = f"{host.remote_root}/staging/{self.run_id}"
+        self.remote_artifacts_dir = f"{host.remote_root}/artifacts/{self.run_id}"
         self.image_tag = "llm-serving-vllm:v0.28.0"
 
     def run(self) -> Tuple[int, Path]:
@@ -119,7 +124,8 @@ class ExperimentRunner:
             # Retrieve remote artifacts back to local_run_dir
             try:
                 logger.info("Synchronizing remote artifacts back to local output...")
-                self.transport.fetch_directory_from_remote(self.remote_staging_dir, self.local_run_dir)
+                self._collect_remote_artifacts()
+                self.transport.fetch_directory_from_remote(self.remote_artifacts_dir, self.local_run_dir)
             except Exception as fetch_err:
                 logger.warning(f"Could not fetch all remote artifacts: {fetch_err}")
 
@@ -255,7 +261,8 @@ class ExperimentRunner:
 
     def _ensure_host_libraries(self) -> None:
         """Installs missing direct-host dependencies, then verifies their imports."""
-        libraries = {"vllm": "vllm"}
+        self._ensure_host_virtualenv()
+        libraries = {"vllm": "vllm", "ninja": "ninja"}
         if self.profile.quality.tasks:
             libraries["lm_eval"] = "lm-eval[api]"
 
@@ -300,13 +307,66 @@ class ExperimentRunner:
                 f"The vLLM console script for {self.host.python_executable!r} is unavailable on the remote host."
             )
 
+    def _ensure_host_virtualenv(self) -> None:
+        """Use a persistent project virtual environment for host-mode packages.
+
+        Official Pod images commonly mark their system Python as externally
+        managed. Installing vLLM there would require bypassing PEP 668 and can
+        damage the image. A project-scoped virtual environment keeps runtime
+        packages reproducible and survives a runner restart on the same Pod.
+        """
+        venv_dir = f"{self.host.remote_root}/.llm-serving-venv"
+        venv_python = f"{venv_dir}/bin/python"
+        if self.host.python_executable == venv_python:
+            return
+
+        current_python = self.host.python_executable
+        create_cmd = (
+            f"mkdir -p {shlex.quote(self.host.remote_root)} && "
+            f"if test -x {shlex.quote(venv_python)}; then true; "
+            f"else {shlex.quote(current_python)} -m venv {shlex.quote(venv_dir)}; fi"
+        )
+        created = self.transport.run_cmd(create_cmd, timeout=300)
+        if not created.ok:
+            detail = created.stderr or created.stdout or "virtual environment creation failed"
+            raise RuntimeError(
+                f"Could not create host virtual environment at {venv_dir}: {detail.strip()}"
+            )
+        self.host = self.host.model_copy(update={"python_executable": venv_python})
+        ready = self.transport.run_cmd(
+            f"{shlex.quote(self.host.python_executable)} -c "
+            f"{shlex.quote('import sys; assert sys.prefix != sys.base_prefix')}"
+        )
+        if not ready.ok:
+            detail = ready.stderr or ready.stdout or "virtual environment Python is unavailable"
+            raise RuntimeError(
+                f"Host virtual environment at {venv_dir} is not usable: {detail.strip()}"
+            )
+
+    def _collect_remote_artifacts(self) -> None:
+        """Copy only run outputs out of the staged source checkout before fetch."""
+        command = (
+            f"mkdir -p {shlex.quote(self.remote_artifacts_dir)} && "
+            "for item in cases evaluation; do "
+            f"if test -d {shlex.quote(self.remote_staging_dir)}/$item; then "
+            f"cp -a {shlex.quote(self.remote_staging_dir)}/$item {shlex.quote(self.remote_artifacts_dir)}/; fi; "
+            "done"
+        )
+        result = self.transport.run_cmd(command)
+        if not result.ok:
+            detail = result.stderr or result.stdout or "artifact collection failed"
+            raise RuntimeError(f"Could not collect remote run artifacts: {detail.strip()}")
+
     def _host_vllm_cli(self) -> str:
         """Returns the vLLM console-script path belonging to python_executable."""
-        scripts_dir = (
+        return f'"{self._host_scripts_dir()}/vllm"'
+
+    def _host_scripts_dir(self) -> str:
+        """Returns a shell expression resolving the host Python scripts directory."""
+        return (
             f"$({shlex.quote(self.host.python_executable)} -c "
             f"{shlex.quote('import sysconfig; print(sysconfig.get_path(\"scripts\"))')})"
         )
-        return f'"{scripts_dir}/vllm"'
 
     def _ensure_runtime(self) -> str:
         if self.host.execution_mode == "host":
@@ -408,7 +468,8 @@ class ExperimentRunner:
         commands.append(
             f"export CUDA_VISIBLE_DEVICES={shlex.quote(gpu_devices)} "
             f"HF_HOME={shlex.quote(self.host.hf_cache_path)} "
-            f"VLLM_CACHE_ROOT={shlex.quote(self.host.vllm_cache_path)}"
+            f"VLLM_CACHE_ROOT={shlex.quote(self.host.vllm_cache_path)} "
+            f"PATH={self._host_scripts_dir()}:$PATH"
         )
         commands.extend(
             f"export {key}={shlex.quote(value)}"
@@ -678,11 +739,17 @@ class ExperimentRunner:
                     task=task,
                     base_url="http://127.0.0.1:8000/v1/completions",
                     output_dir="/workspace/output",
+                    max_length=self.profile.server.max_model_len,
                 )
                 exec_cmd = f"docker exec {shlex.quote(cname)} {' '.join(shlex.quote(a) for a in cmd)}"
-                res = self.transport.run_cmd(exec_cmd, timeout=3600)
+                res = self.transport.run_cmd(exec_cmd, timeout=QUALITY_EVALUATION_TIMEOUT_SECONDS)
+                if not res.ok:
+                    detail = res.stderr or res.stdout or "lm-eval exited without diagnostics"
+                    raise RuntimeError(f"lm-eval task '{task.name}' failed: {detail.strip()}")
 
                 raw_json = self._load_quality_results(remote_eval_dir, res.stdout)
+                if not raw_json.get("results"):
+                    raise RuntimeError(f"lm-eval task '{task.name}' completed without a results JSON")
 
                 parsed_tasks = parse_lm_eval_results(raw_json)
                 for pt in parsed_tasks:
@@ -708,12 +775,20 @@ class ExperimentRunner:
                     task=task,
                     base_url="http://127.0.0.1:8000/v1/completions",
                     output_dir=remote_eval_dir,
+                    max_length=self.profile.server.max_model_len,
                 )
                 host_cmd = [self.host.python_executable, "-m", cmd[0], *cmd[1:]]
                 result = self.transport.run_cmd(
-                    " ".join(shlex.quote(arg) for arg in host_cmd), timeout=3600
+                    f"{self._host_environment_setup()} && "
+                    + " ".join(shlex.quote(arg) for arg in host_cmd),
+                    timeout=QUALITY_EVALUATION_TIMEOUT_SECONDS,
                 )
+                if not result.ok:
+                    detail = result.stderr or result.stdout or "lm-eval exited without diagnostics"
+                    raise RuntimeError(f"lm-eval task '{task.name}' failed: {detail.strip()}")
                 raw_json = self._load_quality_results(remote_eval_dir, result.stdout)
+                if not raw_json.get("results"):
+                    raise RuntimeError(f"lm-eval task '{task.name}' completed without a results JSON")
                 eval_results.extend(metric.to_dict() for metric in parse_lm_eval_results(raw_json))
             return eval_results
         finally:

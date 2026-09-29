@@ -1,0 +1,62 @@
+# Local Runpod Pod lifecycle settings for the qwen35-0.8b smoke profile.
+# Copy to runpod.local.yaml and review every provider setting.
+# The SDK reads ~/.runpod/config.toml [default].api_key by default. RUNPOD_API_KEY
+# is an automation override; never put credentials in this file.
+schema_version: 1
+
+machine:
+  name: toyai-qwen08
+
+  # This current official Runpod PyTorch image supports the normal Pod workflow.
+  # Before running the llm-serving harness in host mode, install its matching
+  # Python runtime dependencies on the Pod (see docs/flash.md). For repeat use,
+  # replace this with a purpose-built image that has vLLM 0.28.0 and
+  # lm-eval 0.4.12 already installed. Template creation is outside this slice.
+  image_name: "runpod/pytorch:1.0.3-cu1281-torch291-ubuntu2404"
+
+  # The official Python SDK creates one exact Runpod GPU type per request.
+  gpu_type_ids:
+    - "NVIDIA GeForce RTX 4090"
+  gpu_count: 1
+  cloud_type: SECURE
+  container_disk_gb: 50
+  volume_gb: 100
+  volume_mount_path: /workspace
+  ports:
+    - 22/tcp
+  # For portable persistence, set volume_gb: 0, create a network volume in the
+  # same data center in Runpod, and uncomment:
+  # network_volume_id: "REPLACE_WITH_NETWORK_VOLUME_ID"
+
+host:
+  alias: runpod-qwen08
+  # Configure an SSH public key in Runpod before creating the Pod. The SDK enables
+  # SSH; official images use the registered key to start sshd. `flash create
+  # --wait` uses non-interactive key authentication and will not prompt for a
+  # password. Point this at the matching local private key when it is not part
+  # of the default SSH agent/key set.
+  # Used when the SDK response does not include an SSH username. A reported
+  # direct-SSH username overrides this value in the generated HostConfig.
+  ssh_user: root
+  ssh_key_path: null
+
+  # Run vLLM directly in the Pod's Python environment. Verify `python3 --version`
+  # and install compatible packages before invoking the harness. The current
+  # harness requires Python >=3.10.
+  execution_mode: host
+  python_executable: python3
+  environment: {}
+  remote_root: /workspace/toyai/llm-serving
+  gpu_ids: [0]
+  expected_gpu_model: RTX 4090
+  hf_cache_path: /workspace/.cache/huggingface
+  vllm_cache_path: /workspace/.cache/vllm
+  secret_env_file: null
+  min_disk_space_gb: 20.0
+
+driver:
+  # Relative state paths resolve beside this file. The generated files are local
+  # operator state and must not be committed or uploaded to the Pod.
+  state_dir: .flash
+  readiness_timeout_seconds: 900
+  poll_interval_seconds: 5

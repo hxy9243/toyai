@@ -17,9 +17,8 @@ parallelism:
   data_parallel: 1
 
 server:
-  # This benchmark's serving cap is deliberately below the published 262144
-  # context window recorded in model_card.
-  max_model_len: 16384
+  # Serve the model's published 262144-token context window recorded in model_card.
+  max_model_len: 262144
   gpu_memory_utilization: 0.90
   trust_remote_code: false
   startup_timeout_seconds: 3600

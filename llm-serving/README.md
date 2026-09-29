@@ -25,11 +25,11 @@ Copy `hosts.example.yaml` to `hosts.local.yaml` (gitignored):
 cp hosts.example.yaml hosts.local.yaml
 ```
 
-Update your remote host SSH target, GPU IDs, and cache paths. Set `execution_mode: host` to run without Docker. The runner installs missing `vllm` and, when quality tasks are enabled, `lm-eval[api]` into `python_executable`; it does not upgrade packages already present. Docker remains the default.
+Update your remote host SSH target, GPU IDs, and cache paths. Set `execution_mode: host` to run without Docker. The runner creates and reuses `<remote_root>/.llm-serving-venv` by default, using `python_executable` only as its bootstrap interpreter. It installs missing `vllm` and, when quality tasks are enabled, `lm-eval[api]` there. Docker remains the default.
 
 ```yaml
 execution_mode: host
-python_executable: /workspace/.venv/bin/python
+python_executable: python3  # bootstrap interpreter for .llm-serving-venv
 environment:
   VLLM_USE_FLASHINFER_SAMPLER: "0"
 ```
@@ -64,3 +64,37 @@ Every experiment profile records an official model-card URL, the configuration U
 ```bash
 uv run python -m llm_serving.cli report output/qwen35-27b-bf16/20260902_120000/
 ```
+
+## Qwen 0.8B notebook
+
+The [Qwen smoke notebook](notebooks/qwen35-0.8b-smoke.ipynb) shows the profile,
+serving matrix, saved experiment history, performance charts, and available
+quality results. Run All defaults to local analysis; launching a remote experiment
+requires explicitly enabling its run cell. When no compatible measured run is
+available, it shows an explicit empty state instead of synthetic values.
+
+From this directory:
+
+```bash
+uv sync --extra analysis
+uv run --extra analysis jupyter lab notebooks/qwen35-0.8b-smoke.ipynb
+```
+
+See [notebook usage](docs/notebooks.md) for selecting output directories, configuring
+a remote host, and attaching experiment notes.
+
+## Runpod machines with `flash`
+
+The local `flash` command manages Runpod Pods and exports a host configuration for
+the existing experiment runner. By default it reads the API key from
+`~/.runpod/config.toml`; `RUNPOD_API_KEY` is an explicit override for automation.
+
+```bash
+uv run flash --help
+```
+
+Follow the [Runpod driver guide](docs/flash.md) to configure and plan a machine,
+create it, export its host configuration, and stop it when finished. Stopping
+releases compute but may retain billable storage; this driver does not delete Pods.
+Local provider configuration and `.flash/` state are excluded from Git and remote
+experiment uploads.

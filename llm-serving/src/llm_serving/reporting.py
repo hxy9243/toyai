@@ -100,12 +100,16 @@ def generate_summary_data(
 
             ttft_p50 = b.get("ttft", {}).get("p50_ms")
             base_ttft_p50 = base_b.get("ttft", {}).get("p50_ms")
+            ttft_p95 = b.get("ttft", {}).get("p95_ms")
+            base_ttft_p95 = base_b.get("ttft", {}).get("p95_ms")
 
             tpot_p50 = b.get("tpot", {}).get("p50_ms")
             base_tpot_p50 = base_b.get("tpot", {}).get("p50_ms")
 
             itl_p50 = b.get("itl", {}).get("p50_ms")
             base_itl_p50 = base_b.get("itl", {}).get("p50_ms")
+            itl_p95 = b.get("itl", {}).get("p95_ms")
+            base_itl_p95 = base_b.get("itl", {}).get("p95_ms")
 
             e2e_p50 = b.get("e2e", {}).get("p50_ms")
             base_e2e_p50 = base_b.get("e2e", {}).get("p50_ms")
@@ -116,8 +120,10 @@ def generate_summary_data(
                     "output_throughput_tok_per_s_pct": calculate_percentage_delta(out_tp, base_out_tp),
                     "request_throughput_req_per_s_pct": calculate_percentage_delta(req_tp, base_req_tp),
                     "ttft_p50_ms_pct": calculate_percentage_delta(ttft_p50, base_ttft_p50, higher_is_better=False),
+                    "ttft_p95_ms_pct": calculate_percentage_delta(ttft_p95, base_ttft_p95, higher_is_better=False),
                     "tpot_p50_ms_pct": calculate_percentage_delta(tpot_p50, base_tpot_p50, higher_is_better=False),
                     "itl_p50_ms_pct": calculate_percentage_delta(itl_p50, base_itl_p50, higher_is_better=False),
+                    "itl_p95_ms_pct": calculate_percentage_delta(itl_p95, base_itl_p95, higher_is_better=False),
                     "e2e_p50_ms_pct": calculate_percentage_delta(e2e_p50, base_e2e_p50, higher_is_better=False),
                 },
             }
@@ -145,15 +151,20 @@ def export_summary_csv(summary_data: Dict[str, Any]) -> str:
         "delta_tok_tp_pct",
         "ttft_p50_ms",
         "ttft_p90_ms",
+        "ttft_p95_ms",
         "ttft_p99_ms",
         "delta_ttft_p50_pct",
+        "delta_ttft_p95_pct",
         "tpot_p50_ms",
         "tpot_p90_ms",
         "tpot_p99_ms",
         "delta_tpot_p50_pct",
         "itl_p50_ms",
         "itl_p90_ms",
+        "itl_p95_ms",
         "itl_p99_ms",
+        "delta_itl_p50_pct",
+        "delta_itl_p95_pct",
         "e2e_p50_ms",
         "e2e_p90_ms",
         "e2e_p99_ms",
@@ -186,15 +197,20 @@ def export_summary_csv(summary_data: Dict[str, Any]) -> str:
                 deltas.get("output_throughput_tok_per_s_pct"),
                 ttft.get("p50_ms"),
                 ttft.get("p90_ms"),
+                ttft.get("p95_ms"),
                 ttft.get("p99_ms"),
                 deltas.get("ttft_p50_ms_pct"),
+                deltas.get("ttft_p95_ms_pct"),
                 tpot.get("p50_ms"),
                 tpot.get("p90_ms"),
                 tpot.get("p99_ms"),
                 deltas.get("tpot_p50_ms_pct"),
                 itl.get("p50_ms"),
                 itl.get("p90_ms"),
+                itl.get("p95_ms"),
                 itl.get("p99_ms"),
+                deltas.get("itl_p50_ms_pct"),
+                deltas.get("itl_p95_ms_pct"),
                 e2e.get("p50_ms"),
                 e2e.get("p90_ms"),
                 e2e.get("p99_ms"),
@@ -260,8 +276,8 @@ def render_markdown_report(summary_data: Dict[str, Any], manifest: Dict[str, Any
     for slug, name in workload_names.items():
         lines.append(f"### Workload: {name}")
         lines.append("")
-        lines.append("| Serving Config | Status | Output Throughput (tok/s) | Δ vs Baseline | TTFT p50 (ms) | Δ TTFT | TPOT p50 (ms) | ITL p50 (ms) | E2E p50 (ms) |")
-        lines.append("|---|---|---:|---:|---:|---:|---:|---:|---:|")
+        lines.append("| Serving Config | Status | Output Throughput (tok/s) | Δ vs Baseline | TTFT p50 (ms) | TTFT p95 (ms) | Δ TTFT p95 | TPOT p50 (ms) | ITL p50 (ms) | ITL p95 (ms) | Δ ITL p95 | E2E p50 (ms) |")
+        lines.append("|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
 
         for case in summary_data.get("cases", []):
             cg_str = "CG: ON" if case.get("cuda_graphs") else "CG: OFF"
@@ -276,16 +292,19 @@ def render_markdown_report(summary_data: Dict[str, Any], manifest: Dict[str, Any
                 out_tp = _fmt_float(bench.get("output_throughput_tok_per_s"))
                 out_tp_delta = f"{deltas.get('output_throughput_tok_per_s_pct'):+.1f}%" if deltas.get("output_throughput_tok_per_s_pct") is not None else "-"
                 ttft_p50 = _fmt_float(bench.get("ttft", {}).get("p50_ms"))
-                ttft_delta = f"{deltas.get('ttft_p50_ms_pct'):+.1f}%" if deltas.get("ttft_p50_ms_pct") is not None else "-"
+                ttft_p95 = _fmt_float(bench.get("ttft", {}).get("p95_ms"))
+                ttft_p95_delta = f"{deltas.get('ttft_p95_ms_pct'):+.1f}%" if deltas.get("ttft_p95_ms_pct") is not None else "-"
                 tpot_p50 = _fmt_float(bench.get("tpot", {}).get("p50_ms"))
                 itl_p50 = _fmt_float(bench.get("itl", {}).get("p50_ms"))
+                itl_p95 = _fmt_float(bench.get("itl", {}).get("p95_ms"))
+                itl_p95_delta = f"{deltas.get('itl_p95_ms_pct'):+.1f}%" if deltas.get("itl_p95_ms_pct") is not None else "-"
                 e2e_p50 = _fmt_float(bench.get("e2e", {}).get("p50_ms"))
 
                 lines.append(
-                    f"| {config_label} | {case_status} | {out_tp} | {out_tp_delta} | {ttft_p50} | {ttft_delta} | {tpot_p50} | {itl_p50} | {e2e_p50} |"
+                    f"| {config_label} | {case_status} | {out_tp} | {out_tp_delta} | {ttft_p50} | {ttft_p95} | {ttft_p95_delta} | {tpot_p50} | {itl_p50} | {itl_p95} | {itl_p95_delta} | {e2e_p50} |"
                 )
             else:
-                lines.append(f"| {config_label} | {case_status} | - | - | - | - | - | - | - |")
+                lines.append(f"| {config_label} | {case_status} | - | - | - | - | - | - | - | - | - | - |")
         lines.append("")
 
 
