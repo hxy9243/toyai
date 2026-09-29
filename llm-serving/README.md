@@ -70,8 +70,8 @@ uv run python -m llm_serving.cli report output/qwen35-27b-bf16/20260902_120000/
 The [Qwen smoke notebook](notebooks/qwen35-0.8b-smoke.ipynb) shows the profile,
 serving matrix, saved experiment history, performance charts, and available
 quality results. Run All defaults to local analysis; launching a remote experiment
-requires explicitly enabling its run cell. When no saved runs are available,
-clearly labeled synthetic examples demonstrate the charts.
+requires explicitly enabling its run cell. When no compatible measured run is
+available, it shows an explicit empty state instead of synthetic values.
 
 From this directory:
 
@@ -86,7 +86,8 @@ a remote host, and attaching experiment notes.
 ## Runpod machines with `flash`
 
 The local `flash` command manages Runpod Pods and exports a host configuration for
-the existing experiment runner. It reads `RUNPOD_API_KEY` from the environment.
+the existing experiment runner. By default it reads the API key from
+`~/.runpod/config.toml`; `RUNPOD_API_KEY` is an explicit override for automation.
 
 ```bash
 uv run flash --help

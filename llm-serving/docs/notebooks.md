@@ -19,7 +19,7 @@ By default, notebooks inspect `llm-serving/output`. Point analysis at another re
 LLM_SERVING_OUTPUT_ROOT=/path/to/output uv run --extra analysis jupyter lab notebooks/
 ```
 
-Failed and partial runs stay in the history table. Missing measurements remain blank and chart panels say they are unavailable. If no measured performance or quality data exists, the notebook switches that section to bundled synthetic fixtures and labels it prominently. Synthetic values are examples only.
+Failed and partial runs stay in the history table. Missing measurements remain blank and chart panels say they are unavailable. If no compatible measured performance or quality data exists, the notebook shows an explicit empty state.
 
 ## Launch a deliberate run
 

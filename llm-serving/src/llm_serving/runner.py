@@ -34,6 +34,10 @@ from llm_serving.workloads import (
 
 logger = logging.getLogger("llm_serving")
 
+# LongBench v2 expands into multiple long-context subtasks. On modest single-GPU
+# hosts, its real evaluation can exceed one hour even for a smoke-limited run.
+QUALITY_EVALUATION_TIMEOUT_SECONDS = 4 * 60 * 60
+
 
 class ExperimentRunner:
     def __init__(
@@ -738,9 +742,14 @@ class ExperimentRunner:
                     max_length=self.profile.server.max_model_len,
                 )
                 exec_cmd = f"docker exec {shlex.quote(cname)} {' '.join(shlex.quote(a) for a in cmd)}"
-                res = self.transport.run_cmd(exec_cmd, timeout=3600)
+                res = self.transport.run_cmd(exec_cmd, timeout=QUALITY_EVALUATION_TIMEOUT_SECONDS)
+                if not res.ok:
+                    detail = res.stderr or res.stdout or "lm-eval exited without diagnostics"
+                    raise RuntimeError(f"lm-eval task '{task.name}' failed: {detail.strip()}")
 
                 raw_json = self._load_quality_results(remote_eval_dir, res.stdout)
+                if not raw_json.get("results"):
+                    raise RuntimeError(f"lm-eval task '{task.name}' completed without a results JSON")
 
                 parsed_tasks = parse_lm_eval_results(raw_json)
                 for pt in parsed_tasks:
@@ -772,9 +781,14 @@ class ExperimentRunner:
                 result = self.transport.run_cmd(
                     f"{self._host_environment_setup()} && "
                     + " ".join(shlex.quote(arg) for arg in host_cmd),
-                    timeout=3600,
+                    timeout=QUALITY_EVALUATION_TIMEOUT_SECONDS,
                 )
+                if not result.ok:
+                    detail = result.stderr or result.stdout or "lm-eval exited without diagnostics"
+                    raise RuntimeError(f"lm-eval task '{task.name}' failed: {detail.strip()}")
                 raw_json = self._load_quality_results(remote_eval_dir, result.stdout)
+                if not raw_json.get("results"):
+                    raise RuntimeError(f"lm-eval task '{task.name}' completed without a results JSON")
                 eval_results.extend(metric.to_dict() for metric in parse_lm_eval_results(raw_json))
             return eval_results
         finally:

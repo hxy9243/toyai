@@ -133,6 +133,37 @@ def test_host_runtime_runs_without_docker_and_validates_libraries(tmp_path, prof
     assert manifest["docker_image_digest"] == "host-vllm:OK"
 
 
+def test_failed_host_quality_task_fails_the_run(tmp_path, profile_fixture, host_fixture):
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    host = host_fixture.model_copy(update={"execution_mode": "host"})
+    transport = MockTransport(host)
+    original_run_cmd = transport.run_cmd
+
+    def fail_lm_eval(cmd: str, timeout=None):
+        if " -m lm_eval " in cmd:
+            return CommandResult(exit_code=1, stdout="", stderr="LongBench task timed out")
+        return original_run_cmd(cmd, timeout)
+
+    transport.run_cmd = fail_lm_eval
+    runner = ExperimentRunner(
+        profile=profile_fixture,
+        host=host,
+        transport=transport,
+        local_project_dir=project_dir,
+        local_output_root=output_dir,
+    )
+
+    exit_code, run_dir = runner.run()
+
+    assert exit_code == 1
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert "lm-eval task 'gsm8k' failed: LongBench task timed out" in manifest["error_message"]
+
+
 def test_host_runtime_installs_missing_libraries(tmp_path, profile_fixture, host_fixture):
     project_dir = tmp_path / "project"
     project_dir.mkdir()
