@@ -1,0 +1,33 @@
+schema_version: 1
+name: qwen38-27b-parallel
+model:
+  id: Qwen/Qwen3.8-27B
+  revision: main
+  variant: BF16
+  dtype: bfloat16
+  model_card:
+    url: https://huggingface.co/Qwen/Qwen3.8-27B
+    config_url: https://huggingface.co/Qwen/Qwen3.8-27B/blob/main/config.json
+    max_position_embeddings: 262144
+parallelism: {tensor_parallel: 2, pipeline_parallel: 1}
+server:
+  max_model_len: 262144
+  gpu_memory_utilization: 0.90
+  startup_timeout_seconds: 3600
+  extra_args: [--enable-prefix-caching, --language-model-only]
+sweep:
+  cuda_graphs: [true]
+  chunked_prefill: [true]
+  parallelism:
+    - {tensor_parallel: 2, pipeline_parallel: 1}
+    - {tensor_parallel: 1, pipeline_parallel: 2}
+  # Maximum active sequences, not the token budget per scheduler iteration.
+  max_num_seqs: [4, 8, 16, 32, 64, 128]
+  repetitions: 1
+benchmark:
+  concurrencies: [8, 16, 32, 64, 128]
+  num_prompts: 512
+  collect_cache_metrics: true
+  timeout_seconds: 3600
+quality:
+  tasks: []

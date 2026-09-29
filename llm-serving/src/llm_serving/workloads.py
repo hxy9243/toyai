@@ -1,6 +1,6 @@
 """Performance workload specifications and benchmark metric extraction for vllm bench serve."""
 
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, replace
 from typing import Any, Dict, List, Optional
 
 
@@ -58,6 +58,15 @@ WORKLOADS: List[BenchmarkWorkload] = [
         max_concurrency=16,
     ),
 ]
+
+
+def expand_workloads(config):
+    """Concurrency sweeps use unthrottled arrivals and enough requests to fill clients."""
+    if not config.concurrencies:
+        return list(WORKLOADS)
+    return [replace(w, slug=f"{w.slug}-c{c}", max_concurrency=c,
+                    request_rate=float("inf"), num_prompts=config.num_prompts)
+            for w in WORKLOADS for c in config.concurrencies]
 
 
 def build_bench_serve_command(
@@ -119,6 +128,8 @@ class NormalizedBenchmarkResult:
     e2e: NormalizedLatencyMetrics
     raw_data: Dict[str, Any]
     profiled: bool = False
+    max_concurrency: int | None = None
+    cache_metrics: Dict[str, Any] | None = None
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
@@ -191,10 +202,10 @@ def normalize_benchmark_output(
         "tokens_per_second",
         "token_throughput",
     )
-    completed = int(
+    completed_value = (
         _find_metric(raw_data, "completed", "completed_requests", "num_completed", "successful_requests")
-        or workload.num_prompts
     )
+    completed = int(completed_value) if completed_value is not None else workload.num_prompts
     duration = _find_metric(raw_data, "total_duration", "duration", "benchmark_duration_s")
 
     ttft = _extract_percentiles(raw_data, "ttft")
@@ -207,6 +218,7 @@ def normalize_benchmark_output(
         e2e = _extract_percentiles(raw_data, "latency")
 
     return NormalizedBenchmarkResult(
+        max_concurrency=workload.max_concurrency,
         workload_slug=workload.slug,
         workload_name=workload.name,
         num_prompts=workload.num_prompts,

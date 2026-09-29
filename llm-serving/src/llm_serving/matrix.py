@@ -1,6 +1,7 @@
 """Deterministic matrix expansion and vLLM CLI flag mapping."""
 
 from dataclasses import dataclass, field
+from itertools import product
 from typing import List
 from llm_serving.schemas import ExperimentProfile
 
@@ -13,6 +14,9 @@ class ServingCase:
     chunked_prefill: bool
     repetition: int
     is_baseline: bool
+    tensor_parallel: int = 1
+    pipeline_parallel: int = 1
+    max_num_seqs: int | None = None
     vllm_args: List[str] = field(default_factory=list)
 
 
@@ -22,6 +26,8 @@ def map_vllm_flags(profile: ExperimentProfile, cuda_graphs: bool, chunked_prefil
         "--model", profile.model.id,
         "--revision", profile.model.revision,
         "--tensor-parallel-size", str(profile.parallelism.tensor_parallel),
+        "--pipeline-parallel-size", str(profile.parallelism.pipeline_parallel),
+        "--data-parallel-size", str(profile.parallelism.data_parallel),
         "--max-model-len", str(profile.server.max_model_len),
         "--gpu-memory-utilization", str(profile.server.gpu_memory_utilization),
         "--host", "0.0.0.0",
@@ -68,27 +74,20 @@ def expand_matrix(profile: ExperimentProfile) -> List[ServingCase]:
     sorted_cg = sorted(profile.sweep.cuda_graphs, reverse=True)
     sorted_cp = sorted(profile.sweep.chunked_prefill, reverse=True)
 
-    idx = 0
-    for rep in range(profile.sweep.repetitions):
-        for cg in sorted_cg:
-            for cp in sorted_cp:
-                cg_tag = "cg1" if cg else "cg0"
-                cp_tag = "cp1" if cp else "cp0"
-                case_id = f"case-{idx:02d}-{cg_tag}-{cp_tag}-rep{rep}"
-                is_baseline = (idx == 0 and cg is True and cp is True)
-                vllm_args = map_vllm_flags(profile, cuda_graphs=cg, chunked_prefill=cp)
-
-                cases.append(
-                    ServingCase(
-                        index=idx,
-                        case_id=case_id,
-                        cuda_graphs=cg,
-                        chunked_prefill=cp,
-                        repetition=rep,
-                        is_baseline=is_baseline,
-                        vllm_args=vllm_args,
-                    )
-                )
-                idx += 1
-
+    modes = profile.sweep.parallelism or [profile.parallelism]
+    batches = profile.sweep.max_num_seqs or [None]
+    combinations = product(range(profile.sweep.repetitions), sorted_cg, sorted_cp, modes, batches)
+    for idx, (rep, cg, cp, mode, batch) in enumerate(combinations):
+        suffix = f"-tp{mode.tensor_parallel}-pp{mode.pipeline_parallel}-dp{mode.data_parallel}-bs{batch}" if profile.sweep.parallelism or profile.sweep.max_num_seqs else ""
+        case_id = f"case-{idx:02d}-cg{int(cg)}-cp{int(cp)}{suffix}-rep{rep}"
+        selected = profile.model_copy(update={"parallelism": mode})
+        args = map_vllm_flags(selected, cuda_graphs=cg, chunked_prefill=cp)
+        if batch is not None:
+            args.extend(["--max-num-seqs", str(batch)])
+        cases.append(ServingCase(
+            index=idx, case_id=case_id, cuda_graphs=cg, chunked_prefill=cp,
+            repetition=rep, is_baseline=(idx == 0 and cg and cp),
+            tensor_parallel=mode.tensor_parallel, pipeline_parallel=mode.pipeline_parallel,
+            max_num_seqs=batch, vllm_args=args,
+        ))
     return cases

@@ -56,6 +56,7 @@ def generate_summary_data(
         "variant": profile.model.variant,
         "parallelism": {
             "tensor_parallel": profile.parallelism.tensor_parallel,
+            "pipeline_parallel": profile.parallelism.pipeline_parallel,
             "data_parallel": profile.parallelism.data_parallel,
         },
         "status": manifest.get("status", "UNKNOWN"),
@@ -79,6 +80,7 @@ def generate_summary_data(
     for c in cases_data:
         case_summary = {
             "case_id": c.get("case_id"),
+            **{key: c.get(key) for key in ("tensor_parallel", "pipeline_parallel", "max_num_seqs")},
             "index": c.get("index"),
             "cuda_graphs": c.get("cuda_graphs"),
             "chunked_prefill": c.get("chunked_prefill"),
@@ -172,6 +174,8 @@ def export_summary_csv(summary_data: Dict[str, Any]) -> str:
         "e2e_p90_ms",
         "e2e_p99_ms",
         "profiled",
+        "tensor_parallel", "pipeline_parallel", "max_num_seqs", "max_concurrency",
+        "cache_hit_rate", "cache_hit_tokens", "cache_query_tokens", "cache_status",
     ]
     writer.writerow(headers)
 
@@ -219,6 +223,9 @@ def export_summary_csv(summary_data: Dict[str, Any]) -> str:
                 e2e.get("p90_ms"),
                 e2e.get("p99_ms"),
                 b.get("profiled", False),
+                case.get("tensor_parallel"), case.get("pipeline_parallel"), case.get("max_num_seqs"),
+                b.get("max_concurrency"),
+                *[(b.get("cache_metrics") or {}).get(k) for k in ("hit_rate", "hit_tokens", "query_tokens", "status")],
             ]
             writer.writerow(row)
 

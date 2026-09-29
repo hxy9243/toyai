@@ -16,6 +16,9 @@ FORBIDDEN_SERVER_EXTRA_ARGS = {
     "-tp",
     "--pipeline-parallel-size",
     "-pp",
+    "--data-parallel-size",
+    "-dp",
+    "--max-num-seqs",
     "--max-model-len",
     "--gpu-memory-utilization",
     "--trust-remote-code",
@@ -85,6 +88,7 @@ class ParallelismConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     tensor_parallel: int = Field(default=1, ge=1, description="Tensor parallel size (TP)")
+    pipeline_parallel: int = Field(default=1, ge=1)
     data_parallel: int = Field(default=1, ge=1, description="Data parallel size (DP, defaults to 1)")
 
 
@@ -117,6 +121,8 @@ class SweepConfig(BaseModel):
 
     cuda_graphs: List[bool] = Field(default_factory=lambda: [True, False], description="Sweep values for CUDA graphs")
     chunked_prefill: List[bool] = Field(default_factory=lambda: [True, False], description="Sweep values for chunked prefill")
+    parallelism: List[ParallelismConfig] = Field(default_factory=list)
+    max_num_seqs: List[int] = Field(default_factory=list)
     repetitions: int = Field(default=1, ge=1, description="Number of repetitions per case")
 
     @model_validator(mode="after")
@@ -129,6 +135,27 @@ class SweepConfig(BaseModel):
             raise ValueError("sweep.cuda_graphs contains duplicate values.")
         if len(self.chunked_prefill) != len(set(self.chunked_prefill)):
             raise ValueError("sweep.chunked_prefill contains duplicate values.")
+        if any(v < 1 for v in self.max_num_seqs) or len(set(self.max_num_seqs)) != len(self.max_num_seqs):
+            raise ValueError("sweep.max_num_seqs must contain unique positive integers")
+        modes = [(p.tensor_parallel, p.pipeline_parallel, p.data_parallel) for p in self.parallelism]
+        if len(set(modes)) != len(modes):
+            raise ValueError("sweep.parallelism contains duplicate configurations")
+        return self
+
+
+class BenchmarkConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    concurrencies: List[int] = Field(default_factory=list)
+    num_prompts: int = Field(default=512, ge=1)
+    collect_cache_metrics: bool = False
+    timeout_seconds: int = Field(default=600, ge=1)
+
+    @model_validator(mode="after")
+    def validate_concurrencies(self):
+        if any(c < 1 for c in self.concurrencies) or len(set(self.concurrencies)) != len(self.concurrencies):
+            raise ValueError("benchmark.concurrencies must contain unique positive integers")
+        if self.concurrencies and self.num_prompts < max(self.concurrencies):
+            raise ValueError("benchmark.num_prompts must reach the maximum concurrency")
         return self
 
 
@@ -213,6 +240,7 @@ class ExperimentProfile(BaseModel):
     parallelism: ParallelismConfig = Field(default_factory=ParallelismConfig)
     server: ServerConfig = Field(default_factory=ServerConfig)
     sweep: SweepConfig = Field(default_factory=SweepConfig)
+    benchmark: BenchmarkConfig = Field(default_factory=BenchmarkConfig)
     quality: QualityConfig = Field(default_factory=QualityConfig)
     profiling: ProfilingConfig = Field(default_factory=ProfilingConfig)
 
@@ -230,6 +258,8 @@ class ExperimentProfile(BaseModel):
 
     @model_validator(mode="after")
     def validate_benchmark_context_limit(self) -> "ExperimentProfile":
+        if self.profiling.enabled and self.benchmark.concurrencies:
+            raise ValueError("Concurrency sweeps must be unprofiled; use a separate diagnostic profile")
         required_context = max(
             workload.input_len + workload.output_len for workload in WORKLOADS
         )
@@ -327,10 +357,11 @@ class HostInventory(BaseModel):
 
 def validate_profile_against_host(profile: ExperimentProfile, host: HostConfig) -> None:
     """Cross-validates an ExperimentProfile against target HostConfig."""
-    required_gpus = profile.parallelism.tensor_parallel * profile.parallelism.data_parallel
+    modes = profile.sweep.parallelism or [profile.parallelism]
+    required_gpus = max(p.tensor_parallel * p.pipeline_parallel * p.data_parallel for p in modes)
     available_gpus = len(host.gpu_ids)
     if required_gpus > available_gpus:
         raise ValueError(
-            f"Profile parallelism requires {required_gpus} GPUs (TP={profile.parallelism.tensor_parallel} * "
-            f"DP={profile.parallelism.data_parallel}), but host has only {available_gpus} assigned GPUs ({host.gpu_ids})."
+            f"Profile parallelism requires {required_gpus} GPUs (TP * PP * DP), "
+            f"but host has only {available_gpus} assigned GPUs ({host.gpu_ids})."
         )

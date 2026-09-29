@@ -1,0 +1,30 @@
+# Offline template: nothing is allocated until an operator runs flash create.
+schema_version: 1
+machine:
+  name: toyai-qwen38-27b
+  image_name: runpod/pytorch:1.0.3-cu1281-torch291-ubuntu2404
+  gpu_type_ids: [NVIDIA A100-SXM4-80GB]
+  gpu_count: 2
+  cloud_type: SECURE
+  container_disk_gb: 50
+  volume_gb: 100
+  volume_mount_path: /workspace
+  ports: [22/tcp]
+host:
+  alias: runpod-qwen38
+  ssh_user: root
+  ssh_key_path: null
+  execution_mode: host
+  python_executable: /workspace/venvs/qwen38/bin/python
+  environment: {}
+  remote_root: /workspace/toyai/llm-serving
+  gpu_ids: [0, 1]
+  expected_gpu_model: A100-SXM4-80GB
+  hf_cache_path: /workspace/.cache/huggingface
+  vllm_cache_path: /workspace/.cache/vllm
+  secret_env_file: null
+  min_disk_space_gb: 20
+driver:
+  state_dir: .flash
+  readiness_timeout_seconds: 900
+  poll_interval_seconds: 5

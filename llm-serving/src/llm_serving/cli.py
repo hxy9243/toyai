@@ -125,7 +125,7 @@ def validate_cmd(profile: str, host_arg: str, inventory_path: Optional[str]):
 
     console.print(f"[bold green]✓ Validation SUCCESS[/bold green]")
     console.print(f"Profile: [cyan]{prof.name}[/cyan] ({prof_path})")
-    console.print(f"Model: [cyan]{prof.model.id}[/cyan] (TP={prof.parallelism.tensor_parallel}, DP={prof.parallelism.data_parallel})")
+    console.print(f"Model: [cyan]{prof.model.id}[/cyan] (TP={prof.parallelism.tensor_parallel}, PP={prof.parallelism.pipeline_parallel}, DP={prof.parallelism.data_parallel})")
     console.print(f"Host: [cyan]{host.ssh_target}[/cyan] (GPUs: {host.gpu_ids}, Model: {host.expected_gpu_model})")
 
 
@@ -159,6 +159,8 @@ def plan_cmd(profile: str, host_arg: str, inventory_path: Optional[str]):
 
     console.print(table)
     console.print(f"\nTotal sweep cases to execute: [bold]{len(cases)}[/bold]")
+    if prof.benchmark.concurrencies:
+        console.print(f"Client concurrencies: {prof.benchmark.concurrencies}; {prof.benchmark.num_prompts} requests per workload/concurrency (unthrottled)")
     if prof.profiling.enabled:
         console.print(
             f"[yellow]Diagnostic profiling: {prof.profiling.workload}; "

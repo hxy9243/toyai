@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
 
+from llm_serving.cache_metrics import cache_counter_delta
 from llm_serving.matrix import ServingCase, expand_matrix
 from llm_serving.quality import build_lm_eval_command, parse_lm_eval_results
 from llm_serving.reporting import (
@@ -26,7 +27,7 @@ from llm_serving.schemas import (
 )
 from llm_serving.transport import CommandResult, RemoteTransport
 from llm_serving.workloads import (
-    WORKLOADS,
+    expand_workloads,
     BenchmarkWorkload,
     build_bench_serve_command,
     normalize_benchmark_output,
@@ -418,6 +419,9 @@ class ExperimentRunner:
                     "index": case.index,
                     "cuda_graphs": case.cuda_graphs,
                     "chunked_prefill": case.chunked_prefill,
+                    "tensor_parallel": case.tensor_parallel,
+                    "pipeline_parallel": case.pipeline_parallel,
+                    "max_num_seqs": case.max_num_seqs,
                     "repetition": case.repetition,
                     "is_baseline": case.is_baseline,
                     "vllm_args": self._performance_serve_args(case),
@@ -439,6 +443,9 @@ class ExperimentRunner:
             "index": case.index,
             "cuda_graphs": case.cuda_graphs,
             "chunked_prefill": case.chunked_prefill,
+            "tensor_parallel": case.tensor_parallel,
+            "pipeline_parallel": case.pipeline_parallel,
+            "max_num_seqs": case.max_num_seqs,
             "repetition": case.repetition,
             "is_baseline": case.is_baseline,
             "vllm_args": self._performance_serve_args(case),
@@ -580,7 +587,8 @@ class ExperimentRunner:
         # Run performance benchmarks
         benchmarks = []
         try:
-            for workload in WORKLOADS:
+            for workload in expand_workloads(self.profile.benchmark):
+                before = self._cache_snapshot(case, workload, "before")
                 bench_res_json_file = f"/workspace/output/benchmark-{workload.slug}.json"
                 bench_cmd = build_bench_serve_command(
                     model_id=self.profile.model.id,
@@ -591,7 +599,7 @@ class ExperimentRunner:
                     profile=self._profile_workload(workload),
                 )
                 exec_cmd = f"docker exec {shlex.quote(cname)} {' '.join(shlex.quote(a) for a in bench_cmd)}"
-                res = self.transport.run_cmd(exec_cmd, timeout=self.profile.profiling.benchmark_timeout_seconds if self._profile_workload(workload) else 600)
+                res = self.transport.run_cmd(exec_cmd, timeout=self.profile.profiling.benchmark_timeout_seconds if self._profile_workload(workload) else self.profile.benchmark.timeout_seconds)
                 if not res.ok:
                     raise RuntimeError(f"Benchmark {workload.name} failed: {res.stderr or res.stdout}")
 
@@ -600,6 +608,9 @@ class ExperimentRunner:
                 # Parse JSON output from container or stdout
                 raw_json = self._load_json_output(remote_case_dir, f"benchmark-{workload.slug}.json", res.stdout)
                 normalized = normalize_benchmark_output(workload, raw_json)
+                if self.profile.benchmark.collect_cache_metrics:
+                    after = self._cache_snapshot(case, workload, "after")
+                    normalized.cache_metrics = cache_counter_delta(before, after)
                 normalized.profiled = self._profile_workload(workload)
                 benchmarks.append(normalized)
 
@@ -618,13 +629,35 @@ class ExperimentRunner:
         self._cleanup_container(case)
         return True, None, benchmarks
 
+    def _cache_snapshot(self, case, workload, phase):
+        if not self.profile.benchmark.collect_cache_metrics:
+            return ""
+        # Each benchmark starts from an empty prefix cache. Do not reset counters.
+        if phase == "before":
+            reset = self.transport.run_cmd(
+                "curl --fail --silent --show-error --max-time 30 -X POST http://127.0.0.1:8000/reset_prefix_cache"
+            )
+            if not reset.ok:
+                raise RuntimeError("Could not reset prefix cache before benchmark")
+        # vLLM's statistics logger updates counters asynchronously; wait outside
+        # client timing to allow the default logging interval to flush.
+        result = self.transport.run_cmd(
+            "sleep 12 && curl --fail --silent --show-error --max-time 30 http://127.0.0.1:8000/metrics",
+            timeout=60,
+        )
+        directory = self.local_run_dir / "cache-metrics" / case.case_id / f"attempt-{self._attempt}"
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / f"{workload.slug}-{phase}.prom").write_text(result.stdout if result.ok else "")
+        return result.stdout if result.ok else ""
+
     def _run_host_case_benchmarks(
         self, case: ServingCase, remote_case_dir: str
     ) -> Tuple[bool, Optional[str], List[Any]]:
         """Runs benchmarks against a direct host vLLM process and saves its artifacts."""
         benchmarks = []
         try:
-            for workload in WORKLOADS:
+            for workload in expand_workloads(self.profile.benchmark):
+                before = self._cache_snapshot(case, workload, "before")
                 bench_res_json_file = f"{remote_case_dir}/benchmark-{workload.slug}.json"
                 bench_cmd = build_bench_serve_command(
                     model_id=self.profile.model.id,
@@ -636,7 +669,7 @@ class ExperimentRunner:
                 )
                 host_bench_cmd = f"{self._host_vllm_cli()} {' '.join(shlex.quote(arg) for arg in bench_cmd[1:])}"
                 result = self.transport.run_cmd(
-                    host_bench_cmd, timeout=self.profile.profiling.benchmark_timeout_seconds if self._profile_workload(workload) else 600
+                    host_bench_cmd, timeout=self.profile.profiling.benchmark_timeout_seconds if self._profile_workload(workload) else self.profile.benchmark.timeout_seconds
                 )
                 if not result.ok:
                     raise RuntimeError(f"Benchmark {workload.name} failed: {result.stderr or result.stdout}")
@@ -645,6 +678,9 @@ class ExperimentRunner:
                 )
                 self._verify_profile_capture(case, workload)
                 normalized = normalize_benchmark_output(workload, raw_json)
+                if self.profile.benchmark.collect_cache_metrics:
+                    after = self._cache_snapshot(case, workload, "after")
+                    normalized.cache_metrics = cache_counter_delta(before, after)
                 normalized.profiled = self._profile_workload(workload)
                 benchmarks.append(normalized)
         except Exception as bench_err:
